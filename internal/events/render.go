@@ -54,6 +54,20 @@ var (
 // colorEnabled：stdout 是否为终端。非终端（管道/日志）时全部输出纯文本，避免 ANSI 乱码。
 var colorEnabled bool
 
+// go-runewidth 在东亚 locale（zh_CN 等）下会把 East Asian Ambiguous 字符
+// （制表符 ─│╭、°、~ 等）按宽度 2 计数；glamour/uniseg 与现代终端
+// （Windows Terminal/VTE/kitty）都按 1。两边不一致会让 hardWrap 把
+// glamour 表格分隔线拦腰截断（表格显示破碎）。未显式设置 RUNEWIDTH_EASTASIAN
+// 时强制按窄歧义计数对齐三方；终端确实按宽歧义渲染的用户可设
+// RUNEWIDTH_EASTASIAN=1 切回。CJK 全角字符（W/F）不受影响，仍按 2 计数。
+// DefaultCondition 需同步改：包 init 时 handleEnv 已按 locale 把它置 true。
+func init() {
+	if os.Getenv("RUNEWIDTH_EASTASIAN") == "" {
+		runewidth.EastAsianWidth = false
+		runewidth.DefaultCondition.EastAsianWidth = false
+	}
+}
+
 var colorOnce sync.Once
 
 // ColorEnabled stdout 是否为终端（按需检测，供未创建 Terminal 的路径如 -I 列表使用）
