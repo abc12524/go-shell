@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"go-shell/internal/chat"
@@ -18,10 +19,32 @@ import (
 	"go-shell/internal/server"
 )
 
-func main() {
-	config.Load()
+// pullConfigFlag 预扫描 -c/--config 指定配置文件（支持 `-c 路径` 与 `-c=路径`），
+// 返回剔除该选项后的参数。须在 config.Load 与 server 子命令判定之前执行。
+func pullConfigFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-c" || a == "--config":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintln(os.Stderr, "-c/--config 需要 <配置文件路径>，例如：go-shell -c /etc/go-shell.env server")
+				os.Exit(1)
+			}
+			config.ConfigOverride = args[i+1]
+			i++
+		case strings.HasPrefix(a, "-c="), strings.HasPrefix(a, "--config="):
+			config.ConfigOverride = strings.TrimPrefix(strings.TrimPrefix(a, "--config="), "-c=")
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
 
-	args := os.Args[1:]
+func main() {
+	args := pullConfigFlag(os.Args[1:])
+	config.Load()
 	if len(args) > 0 && (args[0] == "server" || args[0] == "serve") {
 		if err := server.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "服务退出：%v\n", err)

@@ -7,6 +7,8 @@ CLI 选项与 Python 版 `dp.py` 一一对应；`go-shell server` 启动 API 服
 ## 功能
 
 - 对话 CLI：`go-shell [选项] [问题]`（-n/-s/-S/-I/-D/-k/-m 全部复刻）
+- 配置文件：`-c/--config <路径>` 指定（默认 `<二进制目录>/.env`，不存在时自动从
+  `.env.example` 生成）；`server` 子命令同样可用 `-c`；`-k/-m` 写回 `-c` 指定的文件
 - LLM 双协议：DeepSeek Responses API / OpenAI 兼容 Chat Completions，流式输出
 - 工具：get_system_info / execute_system_command / skill / skill_hub（+可选 web_search）
 - skill 兼容：`skill/<名称>/skill.py` 仍为 Python 脚本，经内嵌 runner（`//go:embed`）子进程执行

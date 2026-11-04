@@ -46,6 +46,7 @@ const UsageText = `使用方法：go-shell [选项] [问题]
   -D, --delete <名称...> → 删除已安装的本地 skill 文件夹
   -k, --key <key>    → 覆盖 DEEPSEEK_API_KEY，并写回 .env
   -m, --model <name> → 覆盖 DEEPSEEK_MODEL，并写回 .env
+  -c, --config <路径> → 指定配置文件（默认 <二进制目录>/.env）；-k/-m 写回同一文件
   server         → 启动 HTTP API 服务（端口/绑定 IP 见 .env 的 SERVER_PORT/SERVER_HOST）
   不加参数       → 查看此帮助
 `

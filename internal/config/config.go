@@ -16,6 +16,10 @@ var (
 	ProjectRoot string
 	EnvPath     string
 
+	// ConfigOverride 由 CLI -c/--config 指定的配置文件路径（main 在 Load 前设置）。
+	// 非空时 EnvPath 用它替代默认的 <二进制目录>/.env；-k/-m 写回也落到该文件。
+	ConfigOverride string
+
 	// ===== LLM =====
 	APIKey        string
 	BaseURL       string
@@ -183,10 +187,22 @@ func InferProvider(baseURL string) string {
 // Load 加载 .env 与环境变量到全局配置。幂等，可重复调用。
 func Load() {
 	ProjectRoot = resolveRoot()
-	EnvPath = filepath.Join(ProjectRoot, ".env")
-	if _, err := os.Stat(EnvPath); os.IsNotExist(err) {
-		if example, err2 := os.ReadFile(filepath.Join(ProjectRoot, ".env.example")); err2 == nil {
-			_ = os.WriteFile(EnvPath, example, 0o644)
+	if ConfigOverride != "" {
+		abs, err := filepath.Abs(ConfigOverride)
+		if err != nil {
+			abs = ConfigOverride
+		}
+		EnvPath = abs
+		if _, err := os.Stat(EnvPath); err != nil {
+			fmt.Fprintf(os.Stderr, "配置文件不存在或不可读：%s\n", EnvPath)
+			os.Exit(1)
+		}
+	} else {
+		EnvPath = filepath.Join(ProjectRoot, ".env")
+		if _, err := os.Stat(EnvPath); os.IsNotExist(err) {
+			if example, err2 := os.ReadFile(filepath.Join(ProjectRoot, ".env.example")); err2 == nil {
+				_ = os.WriteFile(EnvPath, example, 0o644)
+			}
 		}
 	}
 	data, err := os.ReadFile(EnvPath)
