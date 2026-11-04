@@ -1,0 +1,113 @@
+// go-shell — shell-tool 的 Go 实现（单二进制）
+//
+// 用法：
+//   go-shell [选项] [问题]   对话（同 Python dp.py）
+//   go-shell server          启动 HTTP API（SERVER_HOST/SERVER_PORT 在 .env）
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"go-shell/internal/chat"
+	"go-shell/internal/config"
+	"go-shell/internal/events"
+	"go-shell/internal/server"
+)
+
+func main() {
+	config.Load()
+
+	args := os.Args[1:]
+	if len(args) > 0 && (args[0] == "server" || args[0] == "serve") {
+		if err := server.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "服务退出：%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	opts, errMsg := chat.ParseArgs(args)
+	if errMsg != "" {
+		t := events.NewTerminal()
+		events.Warning(t, errMsg, "")
+		os.Exit(1)
+	}
+
+	// -S/--skill 无参数：列出全部 skill
+	if opts.ShowSkills {
+		fmt.Print(chat.SkillsText())
+		return
+	}
+	// -S/--skill：开关某 skill 的 status
+	if opts.SkillStatus[0] != "" {
+		ok, message := chat.SetStatus(opts.SkillStatus[0], opts.SkillStatus[1])
+		fmt.Println(message)
+		if !ok {
+			os.Exit(1)
+		}
+		return
+	}
+	// -I/-D：远程 skill 管理
+	if opts.HubAction != "" {
+		text, code := chat.HubText(opts.HubAction, opts.HubNames)
+		fmt.Print(text)
+		if code != 0 {
+			os.Exit(1)
+		}
+		return
+	}
+
+	// -s 无参数：只列出最近会话
+	if opts.ListSessions {
+		sink := events.NewTerminal()
+		if err := chat.EnsureDB(sink); err != nil {
+			fmt.Fprintf(os.Stderr, "数据库初始化失败：%v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(chat.ListSessionsText())
+		return
+	}
+
+	// -n 不带 question：只开新会话
+	if opts.Question == "" {
+		if opts.New {
+			sink := events.NewTerminal()
+			if err := chat.EnsureDB(sink); err != nil {
+				fmt.Fprintf(os.Stderr, "数据库初始化失败：%v\n", err)
+				os.Exit(1)
+			}
+			sessionID, isNew, errMsg := chat.ResolveSession(opts)
+			if errMsg != "" {
+				events.Warning(sink, errMsg, "")
+				os.Exit(1)
+			}
+			events.Session(sink, map[bool]string{true: "new", false: "resume"}[isNew], sessionID)
+			fmt.Printf("已开启新会话：%s\n", sessionID)
+			return
+		}
+		fmt.Print(chat.UsageText)
+		return
+	}
+
+	// 对话
+	sink := events.NewTerminal()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	reply, err := chat.RunTurn(ctx, opts, sink)
+	sink.Flush()
+	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintln(os.Stderr, "\n已中断")
+			os.Exit(130)
+		}
+		fmt.Fprintf(os.Stderr, "调用失败：%v\n", err)
+		fmt.Fprintln(os.Stderr, "若为服务繁忙（503/429），稍等片刻重试即可；也可在 .env 中切换 DEEPSEEK_BASE_URL / DEEPSEEK_MODEL 使用备用服务商。")
+		os.Exit(1)
+	}
+	_ = reply
+}
