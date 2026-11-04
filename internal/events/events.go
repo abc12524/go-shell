@@ -194,7 +194,16 @@ type liveRegion struct {
 func (l *liveRegion) render() string {
 	text := l.buf.String()
 	if l.kind == "content" {
-		return renderMarkdown(text, l.t.streamWidth())
+		out := renderMarkdown(text, l.t.streamWidth())
+		// glamour 对超长无空格 token（URL 等）不折行，终端会软换行，
+		// 导致逻辑行数 < 显示行数、重绘光标算术漂移啃掉上方内容。
+		// 这里按显示宽度再硬折一次，保证逻辑行 == 终端显示行。
+		lines := strings.Split(out, "\n")
+		for i, ln := range lines {
+			wl := hardWrap(ln, l.t.streamWidth())
+			lines[i] = strings.Join(wl, "\n")
+		}
+		return strings.Join(lines, "\n")
 	}
 	lines := hardWrap(text, l.t.streamWidth()-2)
 	for i := range lines {
@@ -235,6 +244,7 @@ func (l *liveRegion) redraw() {
 		fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", l.lines-1)
 	}
 	fmt.Print(out)
+	fmt.Fprint(os.Stdout, "\x1b[J") // 清除帧尾以下可能的残留（计数漂移兜底）
 	l.lines = n
 	l.last = time.Now()
 }
@@ -324,6 +334,7 @@ func (t *Terminal) stopLive() {
 		fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", l.lines-1)
 	}
 	fmt.Println(out)
+	fmt.Fprint(os.Stdout, "\x1b[J") // 定格后清尾，防残留
 }
 
 func (t *Terminal) cacheCall(id, name string, pc *pendingCall) {

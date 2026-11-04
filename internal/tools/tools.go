@@ -9,10 +9,8 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"go-shell/internal/config"
@@ -138,9 +136,7 @@ func ExecuteSystemCommand(command string) string {
 	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
 	cmd.Stdout = &syncBuffer{}
 	cmd.Stderr = &syncBuffer{}
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
+	setProcGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return envelope.Error("执行失败 - "+err.Error(), "internal")
 	}
@@ -152,13 +148,7 @@ func ExecuteSystemCommand(command string) string {
 	case waitErr = <-done:
 	case <-ctx.Done():
 		// 超时：杀整棵进程树
-		if runtime.GOOS != "windows" {
-			if cmd.Process != nil {
-				syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-		} else if cmd.Process != nil {
-			exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
-		}
+		killTree(cmd.Process)
 		<-done
 		return envelope.Error("命令执行超时（1小时）", "timeout")
 	}

@@ -310,7 +310,7 @@ func drawPanel(lines []string, title, subtitle string, isErr bool, width int) st
 		bc = stBorderErr
 	}
 	b := lipgloss.NewStyle().Foreground(bc)
-	inner := width - 4
+	inner := width - 5 // 行宽=1+1+inner+1+1=width-1，刻意不满宽（规避 conpty 满行换行 bug）
 	if inner < 10 {
 		inner = 10
 	}
@@ -321,26 +321,22 @@ func drawPanel(lines []string, title, subtitle string, isErr bool, width int) st
 	}
 	fullTitle := "▸ " + title
 
-	// 顶边：╭─ title ────╮
+	// 顶边：╭─ title ────╮（总宽 width-1）
 	tw := runewidth.StringWidth(fullTitle)
-	dash := width - tw - 5
+	dash := width - tw - 6
 	if dash < 1 {
 		dash = 1
 	}
 	top := b.Render("╭") + b.Render("─ ") + sty(stPanelTtl, fullTitle) + " " +
 		b.Render(strings.Repeat("─", dash)) + b.Render("╮")
 
-	// 底边：╰──── ──╯ 或 ╰──── ✓ 完成 ──╯（副标右对齐）
+	// 底边：╰──── ✓ 完成 ──╯（副标右对齐，总宽 width-1：1+left+1+sw+1+2+1）
 	var bottom string
 	if subtitle != "" {
 		sw := runewidth.StringWidth(subtitle)
-		total := width - sw - 5
-		if total < 2 {
-			total = 2
-		}
-		left := total - 2
-		if left < 0 {
-			left = 0
+		left := width - sw - 7
+		if left < 1 {
+			left = 1
 		}
 		subStyle := stOk
 		if isErr {
@@ -349,7 +345,7 @@ func drawPanel(lines []string, title, subtitle string, isErr bool, width int) st
 		bottom = b.Render("╰") + b.Render(strings.Repeat("─", left)) + " " +
 			sty(subStyle, subtitle) + " " + b.Render(strings.Repeat("─", 2)) + b.Render("╯")
 	} else {
-		bottom = b.Render("╰") + b.Render(strings.Repeat("─", width-2)) + b.Render("╯")
+		bottom = b.Render("╰") + b.Render(strings.Repeat("─", width-3)) + b.Render("╯")
 	}
 
 	var sb strings.Builder
