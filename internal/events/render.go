@@ -205,7 +205,7 @@ var (
 // 加粗（strong）、斜体（em）、行内代码（code）默认渲染偏红/不着色，按需求改为绿色。
 func mdStyleConfig() glamourAnsi.StyleConfig {
 	base := styles.LightStyleConfig
-	if lipgloss.HasDarkBackground() {
+	if preferDarkBackground() {
 		base = styles.DarkStyleConfig
 	}
 	green := "2" // ansi256 绿色（StylePrimitive.Color 为 *string）
@@ -213,6 +213,20 @@ func mdStyleConfig() glamourAnsi.StyleConfig {
 	base.Emph.Color = &green
 	base.Code.Color = &green
 	return base
+}
+
+// preferDarkBackground 只凭环境变量判断深色终端，绝不向终端发查询：
+// lipgloss.HasDarkBackground() 会发 OSC 11（查背景色）+ DSR 6n（查光标位置），
+// 部分终端/ssh 链路下应答不被消费会残留到输入队列，引发提示符异常。
+func preferDarkBackground() bool {
+	if fg := os.Getenv("COLORFGBG"); fg != "" {
+		parts := strings.Split(fg, ";")
+		if v, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+			// 背景色 0/8 为黑，40~47 为标准深色系
+			return v == 0 || v == 8 || (v >= 40 && v <= 47)
+		}
+	}
+	return true // 缺省按深色（Windows Terminal / 主流终端默认）
 }
 
 // renderMarkdown 一次性渲染 Markdown（glamour，按宽度换行）

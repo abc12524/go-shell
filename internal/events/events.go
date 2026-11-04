@@ -185,11 +185,15 @@ type pendingCall struct {
 type liveRegion struct {
 	kind   string
 	buf    strings.Builder
-	lines  int // 上一次渲染占用的行数
+	lines  int    // 上一次渲染占用的行数
 	last   time.Time
-	frozen bool // 超过屏幕高度后冻结：不再重绘，增量原样追加
+	frozen bool // 超过预算后冻结：不再重绘，增量原样追加
+	cap    int  // 可视帧高度上限（=起点行到屏幕底部的剩余空间），0 表示未知
 	t      *Terminal
 }
+
+// termIsTerminal 供 cursor_*.go 共用的 isatty 判断
+func termIsTerminal(fd int) bool { return term.IsTerminal(fd) }
 
 func (l *liveRegion) render() string {
 	text := l.buf.String()
@@ -226,24 +230,38 @@ func (l *liveRegion) feed(delta string) {
 }
 
 func (l *liveRegion) redraw() {
-	out := l.render()
-	n := strings.Count(out, "\n") + 1
+	full := l.render()
+	n := strings.Count(full, "\n") + 1
 	h := l.t.termHeight() - 1
-	if h > 0 && n > h {
-		// 冻结：把当前累积内容渲染一次后自然滚屏，后续增量原样追加
+	// 可视帧上限：优先用起点测量的剩余空间（钉屏），否则整屏高度
+	limit := h
+	if l.cap > 0 && l.cap < limit {
+		limit = l.cap
+	}
+	// 预算超限（内容远超三屏）：定格当前可见的尾部后转原样追加，
+	// 避免超长文本以 6fps 反复全量重渲染；只打当前可见窗口，屏幕不跳动
+	if h > 0 && n > h*3 {
 		if l.lines > 0 {
 			fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", l.lines-1)
 		}
-		fmt.Println(out)
+		lines := strings.Split(full, "\n")
+		fmt.Println(strings.Join(lines[len(lines)-limit:], "\n"))
 		l.frozen = true
 		l.lines = 0
 		l.last = time.Now()
 		return
 	}
+	// 流式期间把可视区钉在可用空间内（只显示尾部）：重绘不再把上方
+	// 的提示符/历史输出滚走；完整内容在定格（stopLive）时一次性输出
+	if limit > 0 && n > limit {
+		lines := strings.Split(full, "\n")
+		full = strings.Join(lines[len(lines)-limit:], "\n")
+		n = limit
+	}
 	if l.lines > 0 {
 		fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", l.lines-1)
 	}
-	fmt.Print(out)
+	fmt.Print(full)
 	fmt.Fprint(os.Stdout, "\x1b[J") // 清除帧尾以下可能的残留（计数漂移兜底）
 	l.lines = n
 	l.last = time.Now()
@@ -310,7 +328,17 @@ func (t *Terminal) stream(kind, delta string) {
 	}
 	if t.live == nil || t.live.kind != kind {
 		t.stopLive()
-		t.live = &liveRegion{kind: kind, t: t}
+		l := &liveRegion{kind: kind, t: t}
+		// 测量起点行：把流式帧钉在「起点到屏幕底」的剩余空间内，
+		// 重绘阶段就不会把上方内容（提示符/历史输出）滚出屏幕。
+		// 剩余空间太小（起点贴着屏幕底）时不钉屏——窗口太小不如让它
+		// 正常滚动（与 rich 一致），内容仍走 glamour 渲染。
+		if r := cursorRow(); r > 0 {
+			if avail := t.termHeight() - r; avail >= 6 {
+				l.cap = avail - 2 // 留 2 行余量防宽字符歧义导致的软换行
+			}
+		}
+		t.live = l
 	}
 	t.live.feed(delta)
 }
