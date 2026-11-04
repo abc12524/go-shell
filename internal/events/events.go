@@ -166,7 +166,8 @@ func (c *Channel) Close() {
 //   - 正文/思考：终端下按 ~6fps 节流 Live 重绘（正文经 glamour 渲染 Markdown，
 //     思考过程灰阶斜体）；非终端（管道/日志）下增量原样透传
 //   - 工具调用/结果：圆角面板（调用先缓存，结果到达后合并输出）
-//   - 内容超过屏幕高度后自动「冻结」Live 区，退化为原样追加，避免重绘串屏
+//   - 流式区全帧重绘、自然滚动：旧行一旦输出就定格在屏幕/回滚缓冲里，
+//     不会被后续帧覆盖侵占
 type Terminal struct {
 	mu      sync.Mutex
 	isTTY   bool
@@ -183,13 +184,11 @@ type pendingCall struct {
 
 // liveRegion 流式渲染区（正文/思考各一个，切换时先定格旧区）
 type liveRegion struct {
-	kind   string
-	buf    strings.Builder
-	lines  int    // 上一次渲染占用的行数
-	last   time.Time
-	frozen bool // 超过预算后冻结：不再重绘，增量原样追加
-	cap    int  // 可视帧高度上限（=起点行到屏幕底部的剩余空间），0 表示未知
-	t      *Terminal
+	kind  string
+	buf   strings.Builder
+	lines int // 上一次渲染占用的行数（可能超过屏高：区域顶已滚出屏幕时配合钳制语义）
+	last  time.Time
+	t     *Terminal
 }
 
 // termIsTerminal 供 cursor_*.go 共用的 isatty 判断
@@ -218,10 +217,6 @@ func (l *liveRegion) render() string {
 
 func (l *liveRegion) feed(delta string) {
 	l.buf.WriteString(delta)
-	if l.frozen {
-		os.Stdout.WriteString(delta)
-		return
-	}
 	// 节流：~6fps，与原版 _LIVE_FPS 一致，避免逐 token 重绘闪烁
 	if time.Since(l.last) < time.Second/6 {
 		return
@@ -229,37 +224,21 @@ func (l *liveRegion) feed(delta string) {
 	l.redraw()
 }
 
+// redraw 全帧重绘。不做尾部裁剪/钉屏：旧行一旦输出就留在屏幕上，帧超出
+// 屏幕时自然滚入回滚缓冲——新内容只会把上方内容正常顶走，绝不会覆盖
+// 尚未读完的行（此前「尾部窗口滑动重绘」正是旧行被侵占的原因）。
 func (l *liveRegion) redraw() {
 	full := l.render()
 	n := strings.Count(full, "\n") + 1
-	h := l.t.termHeight() - 1
-	// 可视帧上限：优先用起点测量的剩余空间（钉屏），否则整屏高度
-	limit := h
-	if l.cap > 0 && l.cap < limit {
-		limit = l.cap
+	h := l.t.termHeight()
+	// 帧高超过一屏时区域顶已滚出屏幕，上移量钳制到屏幕内（CUU 会在顶行截停，
+	// 此时屏幕上已全是本区域内容，从顶行清起重绘是正确行为）
+	up := l.lines - 1
+	if up > h-1 {
+		up = h - 1
 	}
-	// 预算超限（内容远超三屏）：定格当前可见的尾部后转原样追加，
-	// 避免超长文本以 6fps 反复全量重渲染；只打当前可见窗口，屏幕不跳动
-	if h > 0 && n > h*3 {
-		if l.lines > 0 {
-			fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", l.lines-1)
-		}
-		lines := strings.Split(full, "\n")
-		fmt.Println(strings.Join(lines[len(lines)-limit:], "\n"))
-		l.frozen = true
-		l.lines = 0
-		l.last = time.Now()
-		return
-	}
-	// 流式期间把可视区钉在可用空间内（只显示尾部）：重绘不再把上方
-	// 的提示符/历史输出滚走；完整内容在定格（stopLive）时一次性输出
-	if limit > 0 && n > limit {
-		lines := strings.Split(full, "\n")
-		full = strings.Join(lines[len(lines)-limit:], "\n")
-		n = limit
-	}
-	if l.lines > 0 {
-		fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", l.lines-1)
+	if up > 0 {
+		fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", up)
 	}
 	fmt.Print(full)
 	fmt.Fprint(os.Stdout, "\x1b[J") // 清除帧尾以下可能的残留（计数漂移兜底）
@@ -328,17 +307,7 @@ func (t *Terminal) stream(kind, delta string) {
 	}
 	if t.live == nil || t.live.kind != kind {
 		t.stopLive()
-		l := &liveRegion{kind: kind, t: t}
-		// 测量起点行：把流式帧钉在「起点到屏幕底」的剩余空间内，
-		// 重绘阶段就不会把上方内容（提示符/历史输出）滚出屏幕。
-		// 剩余空间太小（起点贴着屏幕底）时不钉屏——窗口太小不如让它
-		// 正常滚动（与 rich 一致），内容仍走 glamour 渲染。
-		if r := cursorRow(); r > 0 {
-			if avail := t.termHeight() - r; avail >= 6 {
-				l.cap = avail - 2 // 留 2 行余量防宽字符歧义导致的软换行
-			}
-		}
-		t.live = l
+		t.live = &liveRegion{kind: kind, t: t}
 	}
 	t.live.feed(delta)
 }
@@ -353,13 +322,14 @@ func (t *Terminal) stopLive() {
 	if !t.isTTY {
 		return
 	}
-	if l.frozen {
-		fmt.Println()
-		return
-	}
 	out := l.render()
-	if l.lines > 0 {
-		fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", l.lines-1)
+	h := t.termHeight()
+	up := l.lines - 1
+	if up > h-1 {
+		up = h - 1
+	}
+	if up > 0 {
+		fmt.Fprintf(os.Stdout, "\x1b[%dA\r\x1b[J", up)
 	}
 	fmt.Println(out)
 	fmt.Fprint(os.Stdout, "\x1b[J") // 定格后清尾，防残留
