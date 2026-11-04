@@ -259,7 +259,7 @@ func executeSkill(name string, arguments map[string]any) string {
 		}
 		return envelope.Error(fmt.Sprintf("skill %s 执行失败 - %s", name, msg), "internal")
 	}
-	result := strings.TrimSpace(string(out))
+	result := strings.TrimSpace(normalizeCRLF(string(out)))
 	if result == "" {
 		return envelope.Error(fmt.Sprintf("skill %s 无输出", name), "internal")
 	}

@@ -153,8 +153,8 @@ func ExecuteSystemCommand(command string) string {
 		return envelope.Error("命令执行超时（1小时）", "timeout")
 	}
 
-	stdout := cmd.Stdout.(*syncBuffer).String()
-	stderr := cmd.Stderr.(*syncBuffer).String()
+	stdout := normalizeCRLF(cmd.Stdout.(*syncBuffer).String())
+	stderr := normalizeCRLF(cmd.Stderr.(*syncBuffer).String())
 	returnCode := 0
 	if waitErr != nil {
 		if ee, ok := waitErr.(*exec.ExitError); ok {
@@ -181,6 +181,16 @@ func ExecuteSystemCommand(command string) string {
 	return envelope.Ok(map[string]any{
 		"output": output, "exit_code": returnCode, "truncated": truncated,
 	})
+}
+
+// normalizeCRLF 规范化子进程输出的换行符：\r\n → \n，孤立 \r → \n。
+// Windows 下 powershell/where.exe 等输出 CRLF；若 \r 残留进信封，终端渲染时
+// 每行末尾的 \r 会把光标拉回列 0，随后的填充空格从行首覆盖，把内容左半截
+// 盖没、边框字符顶到行中间（表现为路径缺左边、散落竖线）。孤立 \r（进度条
+// 刷新）按换行处理，避免更新内容挤成一行。
+func normalizeCRLF(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
 }
 
 // syncBuffer 并发安全字节缓冲

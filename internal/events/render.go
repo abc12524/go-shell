@@ -304,6 +304,12 @@ func hardWrap(s string, limit int) []string {
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == '\r' {
+			// 丢弃 CR：残留的 \r（CRLF 输出等）会把光标拉回行首，
+			// 让后续字符从行首覆盖，画面出现左半截被吃、边框错位
+			i += size
+			continue
+		}
 		rw := runewidth.RuneWidth(r)
 		if w+rw > limit {
 			flush()
