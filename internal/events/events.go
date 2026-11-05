@@ -288,16 +288,33 @@ func (t *Terminal) termHeight() int {
 	return 24
 }
 
-// panelWidth 面板宽度：固定为终端宽度，不随内容浮动。
-// 原来封顶 88，导致宽终端上面板比正文折行处短一大截（右边缘锯齿）；
-// 而按内容放宽又会让相邻两块面板宽窄不一。统一取满终端宽，行宽 = width-1，
-// 留 1 列规避 conpty 的满行换行。
-func (t *Terminal) panelWidth() int {
-	w := t.termWidth()
-	if w < 24 {
-		w = 24
+// pickPanelWidth 只有一个宽度阶梯：基准档 = min(终端宽, 88)，下限 24；
+// 内容（表格）在基准档放不下时跳到终端宽这一档。没有中间值。
+func pickPanelWidth(termW, contentW int) int {
+	base := termW
+	if base > 88 {
+		base = 88
 	}
-	return w
+	if base < 24 {
+		base = 24
+	}
+	if contentW > 0 && contentW+5 > base && termW > base {
+		return termW // 第二档：拉满终端宽，表格才不至于被压成竖条
+	}
+	return base
+}
+
+// panelWidth 面板基准宽度 = min(终端宽, 88)，下限 24。
+// 行宽 = width-1，留 1 列规避 conpty 的满行换行。宽终端上停在 88，
+// 而不是把面板拉满整屏。
+func (t *Terminal) panelWidth() int {
+	return pickPanelWidth(t.termWidth(), 0)
+}
+
+// panelWidthFor contentW 是内容不被压缩所需的渲染宽度（目前只按表格算，
+// 正文按宽度折行即可）。放得下基准档就用基准档，放不下才拉满终端宽。
+func (t *Terminal) panelWidthFor(contentW int) int {
+	return pickPanelWidth(t.termWidth(), contentW)
 }
 
 func (t *Terminal) callKey(id, name string) string {
@@ -479,6 +496,8 @@ func (t *Terminal) Emit(evt map[string]any) {
 			} else {
 				parts = append(parts, sty(stSection, "结果"))
 			}
+			// 内容宽（表格自然宽）超过基准档时，面板放宽到终端宽这一档
+			panelW = t.panelWidthFor(payloadContentWidth(output))
 			// 内宽 = 面板宽 - 5（│ + 空格 + 内容 + 空格 + │）。这里原为 -4，
 			// 渲染出的一行比框内宽多 1 列，随后被 hardWrap 再折一次，表格行当场断裂。
 			parts = append(parts, payloadParts(output, resultMaxLines, resultMaxChars, panelW-5)...)

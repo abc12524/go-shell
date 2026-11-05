@@ -1036,6 +1036,47 @@ func metaLine(items [][2]string) string {
 	return line
 }
 
+// payloadContentWidth 内容不被压缩所需的渲染宽度，只按表格计算：
+// 正文本来就要按宽度折行，拿它当依据会让每个面板都拉满终端。无表格返回 0。
+func payloadContentWidth(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.Contains(text, "|") {
+		return 0
+	}
+	best := 0
+	consider := func(s string) {
+		if s == "" || !strings.Contains(s, "|") || !mdTableRowRe.MatchString(s) {
+			return
+		}
+		for _, seg := range splitMarkdownTables(s) {
+			if seg.table == nil {
+				continue
+			}
+			if w := tableLineWidth(tableWidths(seg.table)); w > best {
+				best = w
+			}
+		}
+	}
+	consider(text)
+	// envelope（{status, result}）里的表格在 result 的文本字段中，一并量
+	var env map[string]any
+	if err := json.Unmarshal([]byte(text), &env); err == nil {
+		if _, ok := env["status"]; ok {
+			switch r := env["result"].(type) {
+			case string:
+				consider(r)
+			case map[string]any:
+				for _, k := range sortedKeys(r) {
+					if s, ok := r[k].(string); ok && textKeys[k] {
+						consider(s)
+					}
+				}
+			}
+		}
+	}
+	return best
+}
+
 func payloadParts(text string, maxLines, charLimit, width int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
