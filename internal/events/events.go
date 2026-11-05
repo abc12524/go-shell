@@ -288,26 +288,14 @@ func (t *Terminal) termHeight() int {
 	return 24
 }
 
+// panelWidth 面板宽度：固定为终端宽度，不随内容浮动。
+// 原来封顶 88，导致宽终端上面板比正文折行处短一大截（右边缘锯齿）；
+// 而按内容放宽又会让相邻两块面板宽窄不一。统一取满终端宽，行宽 = width-1，
+// 留 1 列规避 conpty 的满行换行。
 func (t *Terminal) panelWidth() int {
 	w := t.termWidth()
-	if w > 88 {
-		w = 88
-	}
 	if w < 24 {
 		w = 24
-	}
-	return w
-}
-
-// maxPanelWidth 面板允许放宽到的上限：内容（表格）在基准宽度下放不下时，
-// 用满终端宽度，而不是把单元格按列宽硬折成竖条。留 1 列规避满行换行。
-func (t *Terminal) maxPanelWidth() int {
-	w := t.termWidth()
-	if w < 24 {
-		w = 24
-	}
-	if w < t.panelWidth() {
-		return t.panelWidth()
 	}
 	return w
 }
@@ -493,9 +481,7 @@ func (t *Terminal) Emit(evt map[string]any) {
 			}
 			// 内宽 = 面板宽 - 5（│ + 空格 + 内容 + 空格 + │）。这里原为 -4，
 			// 渲染出的一行比框内宽多 1 列，随后被 hardWrap 再折一次，表格行当场断裂。
-			lay := newPanelLayout(panelW-5, t.maxPanelWidth()-5)
-			parts = append(parts, payloadParts(output, resultMaxLines, resultMaxChars, lay)...)
-			panelW = lay.width() + 5 // 表格放不下时面板一起放宽
+			parts = append(parts, payloadParts(output, resultMaxLines, resultMaxChars, panelW-5)...)
 		}
 		sub := "✓ 完成"
 		if isErr {

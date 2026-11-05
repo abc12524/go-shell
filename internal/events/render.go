@@ -352,12 +352,12 @@ func renderMarkdown(text string, width int) string {
 	return strings.Trim(unmaskTildes(out), "\n")
 }
 
-// ---------- 适配宽度 + 自绘表格 ----------
+// ---------- 自绘表格 ----------
 //
 // glamour 的表格按「可用宽度比例」分配列宽：宽度够时把表铺满，不够时直接把
 // 单元格硬折（pausedU/P、100./0%），表格塌成一条条竖线。所以面板内的表格改成
-// 自绘：先按内容算列宽，放不下就压最宽的那一列并用 … 截断，每行恒定一行、
-// 列与列永远对齐；面板宽度也跟着放宽到表格需要的宽度（上限为终端宽）。
+// 自绘：按内容算列宽，放不下就压最宽的列并用 … 截断，每行恒定一行、列与列
+// 永远对齐。面板宽度不随内容变化（见 panelWidth），始终是终端宽。
 
 // mdTableRowRe 粗判表格行（以 | 开头并以 | 结尾）
 var mdTableRowRe = regexp.MustCompile(`(?m)^\s{0,3}\|.*\|\s*$`)
@@ -379,60 +379,20 @@ type mdSeg struct {
 	table *mdTable
 }
 
-// panelLayout 决定一块内容在面板里的渲染宽度。
-// base 是基准内宽，max 是允许放宽的上限（终端宽 - 面板边框）。
-type panelLayout struct {
-	base int
-	max  int
-	used int
-}
-
-func newPanelLayout(base, max int) *panelLayout {
-	if base < 20 {
-		base = 20
-	}
-	if max < base {
-		max = base
-	}
-	return &panelLayout{base: base, max: max}
-}
-
-// use 记录实际用到的渲染宽度，面板据此取宽
-func (p *panelLayout) use(w int) {
-	if w > p.used {
-		p.used = w
-	}
-}
-
-// width 返回这块内容实际需要的内宽
-func (p *panelLayout) width() int {
-	if p.used > p.base {
-		return p.used
-	}
-	return p.base
-}
-
-// md 按需放宽后渲染 Markdown（表格自绘，其余交给 glamour）
-func (p *panelLayout) md(text string) string {
-	w := p.base
+// renderPanelMarkdown 面板内 Markdown：表格自绘，其余交给 glamour。
+// 宽度由面板给定（不随内容浮动），表格放不下就地截断而不是把框撑宽。
+func renderPanelMarkdown(text string, width int) string {
 	segs := splitMarkdownTables(text)
-	if n := segsNaturalWidth(segs); n > w {
-		w = n
-		if w > p.max {
-			w = p.max // 自然宽度超过终端：压到最大宽度，再宽终端会二次折行
-		}
-		p.use(w)
-	}
 	out := make([]string, 0, len(segs))
 	for _, s := range segs {
 		if s.table != nil {
-			out = append(out, strings.Join(renderTableBlock(s.table, w), "\n"))
+			out = append(out, strings.Join(renderTableBlock(s.table, width), "\n"))
 			continue
 		}
 		if strings.TrimSpace(s.text) == "" {
 			continue
 		}
-		out = append(out, renderMarkdown(s.text, w))
+		out = append(out, renderMarkdown(s.text, width))
 	}
 	return strings.Join(out, "\n\n")
 }
@@ -575,20 +535,6 @@ func tableLineWidth(widths []int) int {
 		s += w + 2
 	}
 	return s + len(widths) - 1
-}
-
-// segsNaturalWidth 表格不被压缩所需的最大宽度
-func segsNaturalWidth(segs []mdSeg) int {
-	best := 0
-	for _, s := range segs {
-		if s.table == nil {
-			continue
-		}
-		if w := tableLineWidth(tableWidths(s.table)); w > best {
-			best = w
-		}
-	}
-	return best
 }
 
 // renderTableBlock 自绘定宽表格：一行一条记录、列线永远对齐。
@@ -1045,7 +991,7 @@ func isMarkdown(text string) bool {
 }
 
 // autoParts 按内容自动选渲染：JSON → 高亮；Markdown → 渲染；其他 → 纯文本
-func autoParts(text string, maxLines, charLimit int, lay *panelLayout, what string) []string {
+func autoParts(text string, maxLines, charLimit, width int, what string) []string {
 	raw := strings.TrimSpace(text)
 	if raw == "" {
 		return []string{sty(stMuted, "（空）")}
@@ -1058,7 +1004,7 @@ func autoParts(text string, maxLines, charLimit int, lay *panelLayout, what stri
 	}
 	if isMarkdown(raw) {
 		body, note := clipped(raw, charLimit, maxLines, what)
-		md := lay.md(body)
+		md := renderPanelMarkdown(body, width)
 		parts := strings.Split(md, "\n")
 		if note != "" {
 			parts = append(parts, sty(stMuted, note))
@@ -1090,7 +1036,7 @@ func metaLine(items [][2]string) string {
 	return line
 }
 
-func payloadParts(text string, maxLines, charLimit int, lay *panelLayout) []string {
+func payloadParts(text string, maxLines, charLimit, width int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return []string{sty(stMuted, "（空）")}
@@ -1098,13 +1044,13 @@ func payloadParts(text string, maxLines, charLimit int, lay *panelLayout) []stri
 	var env map[string]any
 	if err := json.Unmarshal([]byte(text), &env); err == nil {
 		if _, ok := env["status"]; ok {
-			return envelopeParts(env, maxLines, charLimit, lay)
+			return envelopeParts(env, maxLines, charLimit, width)
 		}
 	}
-	return autoParts(text, maxLines, charLimit, lay, "结果 ")
+	return autoParts(text, maxLines, charLimit, width, "结果 ")
 }
 
-func envelopeParts(env map[string]any, maxLines, charLimit int, lay *panelLayout) []string {
+func envelopeParts(env map[string]any, maxLines, charLimit, width int) []string {
 	status, _ := env["status"].(string)
 	result := env["result"]
 
@@ -1153,7 +1099,7 @@ func envelopeParts(env map[string]any, maxLines, charLimit int, lay *panelLayout
 			if budget < 2 {
 				budget = 2
 			}
-			parts = append(parts, autoParts(body, budget, charLimit, lay, "结果 ")...)
+			parts = append(parts, autoParts(body, budget, charLimit, width, "结果 ")...)
 		}
 		if len(parts) == 0 {
 			parts = append(parts, jsonView(env, charLimit, maxLines, 0, 0, "结果 ")...)
@@ -1238,7 +1184,7 @@ func envelopeParts(env map[string]any, maxLines, charLimit int, lay *panelLayout
 		if budget < 2 {
 			budget = 2
 		}
-		bp := autoParts(b[1], budget, charLimit, lay, "结果 ")
+		bp := autoParts(b[1], budget, charLimit, width, "结果 ")
 		if b[0] != "" && len(bodies) > 1 {
 			parts = append(parts, append([]string{sty(stMuted, b[0])}, bp...)...)
 		} else {
