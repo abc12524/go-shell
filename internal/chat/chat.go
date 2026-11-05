@@ -437,7 +437,7 @@ func ListSessionsText() string {
 	}
 	activeID := db.GetActiveSessionID()
 	var b strings.Builder
-	fmt.Fprintf(&b, "🕘 最近 %d 条会话\n", len(sessions))
+	fmt.Fprintf(&b, "▸ 最近 %d 条会话\n", len(sessions))
 	for _, s := range sessions {
 		mark := "  "
 		if s.ID == activeID {
@@ -465,7 +465,7 @@ func SkillsText() string {
 	}
 	sort.Strings(names)
 	var b strings.Builder
-	fmt.Fprintf(&b, "🧰 已注册 skill（%d）\n", len(names))
+	fmt.Fprintf(&b, "▸ 已注册 skill（%d）\n", len(names))
 	for _, n := range names {
 		st := overview[n]
 		status := st[0]
@@ -475,7 +475,8 @@ func SkillsText() string {
 		case "disable", "disabled":
 			status = events.AnsiMark("31", status)
 		}
-		fmt.Fprintf(&b, "  %-20s · %s · %s\n", n, status, st[1])
+		// 按显示宽度补位：%-20s 是字节补位，中文 skill 名列宽会歪
+		fmt.Fprintf(&b, "  %s · %s · %s\n", events.PadRight(n, 20), status, st[1])
 	}
 	b.WriteString("开关  go-shell -S <名称> <enable|disable>\n")
 	return b.String()
@@ -493,13 +494,13 @@ func HubText(action string, names []string) (string, int) {
 			return "远程仓库暂无技能", 0
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "🌐 远程 skill（%s，%d）\n", tools.HubSource(), len(skills))
+		fmt.Fprintf(&b, "▸ 远程 skill（%s，%d）\n", tools.HubSource(), len(skills))
 		for _, s := range skills {
 			name, _ := s["name"].(string)
 			desc, _ := s["description"].(string)
 			installed, _ := s["installed"].(bool)
-			// 未安装的 skill 名显示为灰色（先按字节补齐再上色，避免 ANSI 序列破坏对齐）
-			nameCol := fmt.Sprintf("%-20s", name)
+			// 未安装的 skill 名显示为灰色（先按显示宽度补齐再上色，避免 ANSI 序列破坏对齐）
+			nameCol := events.PadRight(name, 20)
 			mark := "未装"
 			if installed {
 				mark = events.GreenMark("已装")
@@ -567,7 +568,7 @@ func HubText(action string, names []string) (string, int) {
 		}
 		var b strings.Builder
 		for kw, hits := range searched {
-			fmt.Fprintf(&b, "🌐 远程 skill · 匹配 '%s'\n", kw)
+			fmt.Fprintf(&b, "▸ 远程 skill · 匹配 '%s'\n", kw)
 			for _, h := range hits {
 				fmt.Fprintf(&b, "  %s\n", h)
 			}

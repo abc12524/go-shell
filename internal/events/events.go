@@ -364,11 +364,10 @@ func (t *Terminal) popCall(id, name string) *pendingCall {
 	return pc
 }
 
-// flushPending 结果一直没到（执行被中断）时兜底输出，避免调用信息丢失
+// flushPending 结果一直没到（执行被中断）时兜底输出，避免调用信息丢失。
+// 按调用发生的先后输出：此前从队尾逐个弹出，被打断时补打的面板是倒序的。
 func (t *Terminal) flushPending() {
-	for len(t.order) > 0 {
-		key := t.order[len(t.order)-1]
-		t.order = t.order[:len(t.order)-1]
+	for _, key := range t.order {
 		pc := t.pending[key]
 		delete(t.pending, key)
 		if pc == nil {
@@ -377,6 +376,7 @@ func (t *Terminal) flushPending() {
 		fmt.Println()
 		fmt.Println(drawPanel(pc.parts, pc.label, "", false, t.panelWidth()))
 	}
+	t.order = nil
 }
 
 // unwrapArguments 拆掉 {skill: x, arguments: {...}} 外层信封，直接展示真正参数
@@ -497,7 +497,7 @@ func (t *Terminal) Emit(evt map[string]any) {
 		if state == "call" {
 			if first {
 				fmt.Println()
-				fmt.Println("  " + sty(stAccent, "🔎 服务端搜索"))
+				fmt.Println("  " + sty(stAccent, "▸ 服务端搜索"))
 			}
 			fmt.Println("    " + sty(stMuted, "·") + " " + sty(stMuted, "发起") + " " + sty(stKey, id))
 		} else {
@@ -510,7 +510,7 @@ func (t *Terminal) Emit(evt map[string]any) {
 		// 插话落地：先把流式区定格，再单独一行说明"这句话已经进上下文了"
 		t.stopLive()
 		text, _ := evt["text"].(string)
-		fmt.Println("  " + sty(stAccent, "💬 已插入") + sty(stMuted, "（本轮改道，不另起一轮）"))
+		fmt.Println("  " + sty(stAccent, "▸ 已插入") + sty(stMuted, "（本轮改道，不另起一轮）"))
 		fmt.Println("    " + sty(stMuted, "›") + " " + sty(stBold, text))
 	case "config":
 		keys, _ := evt["keys"].([]any)
@@ -545,15 +545,15 @@ func (t *Terminal) Emit(evt map[string]any) {
 		fmt.Println(gridBlock("用量 · "+model+" · "+short,
 			[]string{"项目", "tokens", "费用"}, rows, []bool{false, true, true}, 1))
 		if balance != "" {
-			fmt.Println("  " + sty(stMuted, "💰 余额 ") + sty(stOk, symbol+balance))
+			fmt.Println("  " + sty(stMuted, "余额 ") + sty(stOk, symbol+balance))
 		} else {
-			fmt.Println("  " + sty(stMuted, "💰 余额 查询失败"))
+			fmt.Println("  " + sty(stMuted, "余额 查询失败"))
 		}
 	case "error":
 		t.stopLive()
 		t.flushPending()
 		msg, _ := evt["error"].(string)
-		fmt.Println("  " + sty(stErr, "❌ "+msg))
+		fmt.Println("  " + sty(stErr, "✗ "+msg))
 	}
 }
 

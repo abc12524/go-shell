@@ -168,11 +168,18 @@ func clipLines(text string, limit int, what string) (string, string) {
 		fmt.Sprintf("… %s还有 %d 行已折叠（共 %d 行）", what, len(lines)-keep, len(lines))
 }
 
+// clipChars 按字节预算截断，但只切在 rune 边界上：原来的 text[:limit] 会把
+// 多字节字符切成两半，产出非法 UTF-8，终端显示乱码或直接吞字。提示里的
+// 字符数也改按 rune 计（此前报的是字节数，中文会虚高 3 倍）。
 func clipChars(text string, limit int, what string) (string, string) {
 	if len(text) <= limit {
 		return text, ""
 	}
-	return text[:limit], fmt.Sprintf("… %s已截断（共 %d 字符）", what, len(text))
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut], fmt.Sprintf("… %s已截断（共 %d 字符）", what, utf8.RuneCountInString(text))
 }
 
 func clipped(text string, charLimit, maxLines int, what string) (string, string) {
@@ -344,6 +351,36 @@ func padTo(s string, width int, right bool) string {
 	return s + pad
 }
 
+// fitWidth 把 s 收到显示宽度 ≤ max 以内，超出用 … 收尾。
+// 面板标题/副标、紧凑值超宽都会顶破边框或撑开列宽，必须按显示宽度收；
+// 按 rune 数收会把中文（一个 rune 两列）算少，按字节收会把字符切坏。
+func fitWidth(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if dw(s) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > max-1 {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "…"
+}
+
+// PadRight 按显示宽度右侧补空格。导出给 chat 的列表用：%-20s 按字节补位，
+// 中文名占 3 字节/2 列，列宽会歪。
+func PadRight(s string, width int) string { return padTo(s, width, false) }
+
 // ---------- 工具面板（对应 _tool_panel） ----------
 
 // drawPanel 圆角框：标题左侧「▸ name」，副标右侧「✓ 完成 / ✗ 失败」，出错换红描边。
@@ -362,7 +399,9 @@ func drawPanel(lines []string, title, subtitle string, isErr bool, width int) st
 	for _, ln := range lines {
 		body = append(body, hardWrap(ln, inner)...)
 	}
-	fullTitle := "▸ " + title
+	// 标题超宽会把顶边顶出 width-1：dash 被钳到 1 后仍然溢出，整框右边线错行。
+	// 顶边可用宽度 = width-1-5（╭ + "─ " + 空格 + dash + ╮），故标题最多 width-7。
+	fullTitle := fitWidth("▸ "+title, width-7)
 
 	// 顶边：╭─ title ────╮（总宽 width-1）
 	tw := runewidth.StringWidth(fullTitle)
@@ -376,6 +415,8 @@ func drawPanel(lines []string, title, subtitle string, isErr bool, width int) st
 	// 底边：╰──── ✓ 完成 ──╯（副标右对齐，总宽 width-1：1+left+1+sw+1+2+1）
 	var bottom string
 	if subtitle != "" {
+		// 副标同理：底边 ╰ + left + 空格 + 副标 + 空格 + ── + ╯，最多 width-8
+		subtitle = fitWidth(subtitle, width-8)
 		sw := runewidth.StringWidth(subtitle)
 		left := width - sw - 7
 		if left < 1 {
@@ -433,12 +474,9 @@ func scalarView(v any) string {
 		b, _ := json.Marshal(x)
 		text = string(b)
 	}
-	if dw(text) > compactValueMax {
-		runes := []rune(text)
-		if len(runes) > compactValueMax-1 {
-			text = string(runes[:compactValueMax-1]) + "…"
-		}
-	}
+	// 收口按显示宽度：原来用 dw 判断、用 rune 数截，中文（1 rune 2 列）会被判超长
+	// 却只截掉一半的宽度，行宽照样撑破
+	text = fitWidth(text, compactValueMax)
 	return text
 }
 
@@ -468,8 +506,9 @@ func compactView(value map[string]any) []string {
 	}
 	w := 0
 	for _, p := range pairs {
-		if len(p[0]) > w {
-			w = len(p[0])
+		// 键列宽按显示宽度量（len 是字节数，中文键会被算宽 1.5 倍，列距被拉开）
+		if dw(p[0]) > w {
+			w = dw(p[0])
 		}
 	}
 	var lines []string
