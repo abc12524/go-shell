@@ -227,11 +227,14 @@ var (
 	glCache = map[int]*glamour.TermRenderer{}
 )
 
-// escapeTildesLine 把「单个 ~」转义成 \~，连续两个及以上的 ~ 原样保留。
-// goldmark 的删除线扩展认单个 ~ 作定界符：中文里 ~ 表示区间（74%~84%、
-// 4~9 km/h、13~16℃），两个相隔很远的 ~ 会被凑成一对，把中间整段变成
-// 删除线、连同 ~ 一起吃掉。行内代码里的 ~ 不动（转义会显出反斜杠）。
-func escapeTildesLine(s string) string {
+// tildeMask 是替换单个 ~ 的占位符（Unicode 私有区）。用占位符而不是 \~ 转义：
+// goldmark 不消费 ~ 的反斜杠转义，\~ 会连着反斜杠一起印出来。占位符显示宽度 1，
+// 与 ~ 相同，不影响 glamour 折行；渲染完再换回 ~。
+const tildeMask = "\uE000"
+
+// maskTildesLine 把「单个 ~」换成占位符，连续两个及以上的 ~ 原样保留
+// （~~删除线~~ 要照常生效）。行内代码里的 ~ 不动。
+func maskTildesLine(s string) string {
 	var b strings.Builder
 	inCode := false
 	for i := 0; i < len(s); i++ {
@@ -250,17 +253,17 @@ func escapeTildesLine(s string) string {
 			j++
 		}
 		if j-i == 1 {
-			b.WriteString(`\~`)
+			b.WriteString(tildeMask)
 		} else {
-			b.WriteString(s[i:j]) // ~~删除线~~ 的定界符保持原样
+			b.WriteString(s[i:j])
 		}
 		i = j - 1
 	}
 	return b.String()
 }
 
-// escapeTildes 按行处理，围栏代码块（```）内部的 ~ 不转义，否则会印出反斜杠
-func escapeTildes(text string) string {
+// maskTildes 按行处理，围栏代码块（```）内部的 ~ 不替换
+func maskTildes(text string) string {
 	if !strings.Contains(text, "~") {
 		return text
 	}
@@ -278,11 +281,13 @@ func escapeTildes(text string) string {
 			b.WriteString(seg)
 			continue
 		}
-		b.WriteString(escapeTildesLine(line))
+		b.WriteString(maskTildesLine(line))
 		b.WriteString(seg[len(line):])
 	}
 	return b.String()
 }
+
+func unmaskTildes(s string) string { return strings.ReplaceAll(s, tildeMask, "~") }
 
 // mdStyleConfig 基于 glamour 标准 dark/light 风格，着重文字统一改绿色：
 // 加粗（strong）、斜体（em）、行内代码（code）默认渲染偏红/不着色，按需求改为绿色。
@@ -319,9 +324,9 @@ func preferDarkBackground() bool {
 // renderMarkdown 一次性渲染 Markdown（glamour，按宽度换行）
 func renderMarkdown(text string, width int) string {
 	text = flattenHeadings(text)
-	text = escapeTildes(text)
+	text = maskTildes(text)
 	if !colorEnabled {
-		return text
+		return unmaskTildes(text)
 	}
 	if width < 20 {
 		width = 20
@@ -336,15 +341,15 @@ func renderMarkdown(text string, width int) string {
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {
-			return text
+			return unmaskTildes(text)
 		}
 		glCache[width] = r
 	}
 	out, err := r.Render(text)
 	if err != nil {
-		return text
+		return unmaskTildes(text)
 	}
-	return strings.Trim(out, "\n")
+	return strings.Trim(unmaskTildes(out), "\n")
 }
 
 // ---------- ANSI 感知硬换行 / 填充 ----------
