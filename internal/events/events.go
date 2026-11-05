@@ -62,6 +62,16 @@ func ToolRound(s Sink, index, local, search int) {
 	emit(s, "tool_round", map[string]any{"index": index, "local": local, "search": search})
 }
 
+// Turn 本轮登记完成：id 是中途插话的目标标识，interject 表示服务端是否开启了插话
+func Turn(s Sink, id string, interject bool) {
+	emit(s, "turn", map[string]any{"id": id, "interject": interject})
+}
+
+// Interject 一条插话已经写进上下文（客户端据此把这句并入本轮，不再另起一轮）
+func Interject(s Sink, id, text, turnID string) {
+	emit(s, "interject", map[string]any{"id": id, "text": text, "turn_id": turnID})
+}
+
 func ToolCall(s Sink, name string, arguments any, raw string, callID string, parseError string) {
 	payload := map[string]any{"name": name, "id": callID}
 	if arguments != nil {
@@ -496,6 +506,12 @@ func (t *Terminal) Emit(evt map[string]any) {
 	case "warning":
 		msg, _ := evt["message"].(string)
 		fmt.Println("  " + sty(stWarn, "⚠ "+msg))
+	case "interject":
+		// 插话落地：先把流式区定格，再单独一行说明"这句话已经进上下文了"
+		t.stopLive()
+		text, _ := evt["text"].(string)
+		fmt.Println("  " + sty(stAccent, "💬 已插入") + sty(stMuted, "（本轮改道，不另起一轮）"))
+		fmt.Println("    " + sty(stMuted, "›") + " " + sty(stBold, text))
 	case "config":
 		keys, _ := evt["keys"].([]any)
 		names := make([]string, 0, len(keys))

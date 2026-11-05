@@ -2,6 +2,8 @@
 //
 //   POST /chat          同步对话
 //   POST /chat/stream   SSE 流式对话
+//   POST /interject     中途插话（需 X-Interject-Key，见 .env 的 INTERJECT_KEY）
+//   GET  /interject/status 插话开关与当前轮次
 //   GET  /health        健康检查
 //
 // 启动：go-shell server；监听地址取 .env 的 SERVER_HOST（127.0.0.1 / 0.0.0.0）与 SERVER_PORT。
@@ -17,6 +19,7 @@ import (
 	"go-shell/internal/chat"
 	"go-shell/internal/config"
 	"go-shell/internal/events"
+	"go-shell/internal/interject"
 )
 
 // sseEvent 构造 SSE 事件块
@@ -226,7 +229,11 @@ func handlerStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Connection", "keep-alive")
 
-	fmt.Fprint(w, sseEvent("start", nil))
+	// start 带上插话能力：客户端据此决定"流式期间想让模型改道时"走 /interject 还是重发
+	fmt.Fprint(w, sseEvent("start", map[string]any{
+		"interject": interject.Enabled(),
+		"grace":     config.InterjectGrace,
+	}))
 	flusher.Flush()
 
 	// 非对话动作：一次性输出文本为 log 事件后 done
@@ -289,12 +296,97 @@ func handlerHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{"status": "ok", "service": "shell-tool-api"})
 }
 
+// requestKey 取客户端验证串：优先请求头 X-Interject-Key，其次 body 的 key 字段
+func requestKey(r *http.Request, bodyKey string) string {
+	if v := strings.TrimSpace(r.Header.Get("X-Interject-Key")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(bodyKey)
+}
+
+// handlerInterject POST /interject：把一句话递进正在跑的那一轮
+//
+// 只有带对 8 位验证串（.env 的 INTERJECT_KEY）的客户端才能用；递进去的时机由引擎决定
+// （工具边界），本接口最多等 INTERJECT_GRACE 秒拿结果：
+//
+//	{"status":"injected"} 已写进上下文，客户端不必再发新消息
+//	{"status":"timeout"}  这一轮还没走到工具边界（多为卡在一条长命令上），请按新消息重发
+//	{"status":"expired"}  这一轮已经结束，同上
+//	{"status":"idle"}     当前没有正在跑的轮次，直接发新消息即可
+func handlerInterject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"status": "error", "error": "只支持 POST", "code": "method_not_allowed"})
+		return
+	}
+	var body struct {
+		ID     string  `json:"id"`
+		Text   string  `json:"text"`
+		Key    string  `json:"key"`
+		TurnID string  `json:"turn_id"`
+		Wait   float64 `json:"wait"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		badRequest(w, "请求体需为 JSON：{\"text\":\"...\"}")
+		return
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		badRequest(w, "text 不能为空")
+		return
+	}
+
+	// 开关与鉴权：只看 INTERJECT_KEY 是否 8 位、客户端是否带对
+	if !interject.Enabled() {
+		writeJSON(w, 403, map[string]any{
+			"status": "error", "code": "interject_disabled",
+			"error": fmt.Sprintf("服务端未开启中途插话（.env 的 INTERJECT_KEY 需为 %d 位）", interject.KeyLen),
+		})
+		return
+	}
+	if !interject.CheckKey(requestKey(r, body.Key)) {
+		writeJSON(w, 403, map[string]any{
+			"status": "error", "code": "interject_key_invalid",
+			"error": "验证串不正确，客户端无权插话",
+		})
+		return
+	}
+
+	item, turnID := interject.PushTo(body.TurnID, body.ID, body.Text)
+	if item == nil {
+		writeJSON(w, 409, map[string]any{
+			"status": "idle", "code": "no_active_turn",
+			"error": "当前没有正在运行的对话轮次，请直接发新消息",
+		})
+		return
+	}
+
+	grace := time.Duration(config.InterjectGrace) * time.Second
+	if body.Wait > 0 {
+		grace = time.Duration(body.Wait * float64(time.Second))
+	}
+	status := item.Wait(r.Context(), grace)
+	writeJSON(w, 200, map[string]any{
+		"status": status, "id": item.ID, "turn_id": turnID,
+	})
+}
+
+// handlerInterjectStatus GET /interject/status：客户端用它决定要不要走插话这条路
+func handlerInterjectStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, map[string]any{
+		"enabled": interject.Enabled(),
+		"key_len": interject.KeyLen,
+		"grace":   config.InterjectGrace,
+		"turn_id": interject.Active(),
+	})
+}
+
 // Run 启动 HTTP 服务
 func Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handlerHealth)
 	mux.HandleFunc("/chat", handlerChat)
 	mux.HandleFunc("/chat/stream", handlerStream)
+	mux.HandleFunc("/interject", handlerInterject)
+	mux.HandleFunc("/interject/status", handlerInterjectStatus)
 
 	if err := chat.EnsureDB(events.NewTerminal()); err != nil {
 		return fmt.Errorf("数据库初始化失败：%v", err)
@@ -303,6 +395,14 @@ func Run() error {
 	addr := fmt.Sprintf("%s:%d", config.ServerHost, config.ServerPort)
 	fmt.Printf("shell-tool API (go) 监听 http://%s  （SERVER_HOST=%s SERVER_PORT=%d）\n",
 		addr, config.ServerHost, config.ServerPort)
+	switch {
+	case interject.Enabled():
+		fmt.Printf("中途插话：已开启（POST /interject，需 X-Interject-Key；等待上限 %ds）\n", config.InterjectGrace)
+	case config.InterjectKey != "":
+		fmt.Printf("中途插话：已关闭（INTERJECT_KEY 长度不是 %d 位）\n", interject.KeyLen)
+	default:
+		fmt.Printf("中途插话：未配置（在 .env 里设 INTERJECT_KEY=%s 开启）\n", strings.Repeat("x", interject.KeyLen))
+	}
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: mux,

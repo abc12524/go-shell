@@ -19,6 +19,7 @@ import (
 	"go-shell/internal/config"
 	"go-shell/internal/db"
 	"go-shell/internal/events"
+	"go-shell/internal/interject"
 	"go-shell/internal/recall"
 	"go-shell/internal/tools"
 )
@@ -745,6 +746,24 @@ func ChatCompletionWithTools(ctx context.Context, messages []map[string]any, sin
 		messages = append(messages, assistantMsg)
 		messages = append(messages, toolResults...)
 		persist(sessionID, ovSessionID, append([]map[string]any{assistantMsg}, toolResults...))
+
+		// ---- 插话落地：用户在干活期间追的话，在这里进入上下文 ----
+		// 位置只能在**整批**工具结果之后：掺在并行结果中间会留下没有 output 的
+		// function_call，两个协议都会 400，写进历史后每轮重放还会再错一次。
+		// 插话算「新任务」，工具预算重新计——否则剩两轮时插进来，新要求根本来不及做。
+		if turn := interject.FromContext(ctx); turn != nil {
+			if pending := turn.Drain(); len(pending) > 0 {
+				for _, it := range pending {
+					imsg := map[string]any{"role": "user", "content": interject.Wrap(it.Text)}
+					messages = append(messages, imsg)
+					newHistoryMsgs = append(newHistoryMsgs, imsg)
+					persist(sessionID, ovSessionID, []map[string]any{imsg})
+					turn.Ack(it) // 落库之后才回执，HTTP 才能回 injected
+					events.Interject(sink, it.ID, it.Text, turn.ID)
+				}
+				toolRounds = 0
+			}
+		}
 
 		// step 注入：工具结果回来后基于完整批次重新检索
 		if config.OVInject == "step" || config.OVInject == "both" {

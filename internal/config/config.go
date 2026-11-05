@@ -79,6 +79,12 @@ var (
 	ServerHost string // 127.0.0.1 或 0.0.0.0
 	ServerPort int
 
+	// ===== 中途插话 =====
+	// InterjectKey 客户端验证串：必须正好 8 位才算开启，空或长度不符 = 功能关闭。
+	InterjectKey string
+	// InterjectGrace /interject 等待"递进上下文"的最长秒数（超时回 timeout，客户端自己重发）
+	InterjectGrace int
+
 	// ===== skill 运行时 =====
 	PythonBin  string // 执行 skill/*.py 用的解释器（默认 python3）
 	PythonPath string // 冒号分隔的目录，前置到 skill 子进程的 PATH（默认空=不修改）
@@ -276,6 +282,13 @@ func Load() {
 
 	ServerHost = str(envMap, "SERVER_HOST", "127.0.0.1")
 	ServerPort = integer(envMap, "SERVER_PORT", 8000)
+
+	// 插话开关只看 INTERJECT_KEY 是否 8 位（长度不对等于没配，避免半开状态）
+	InterjectKey = strings.TrimSpace(str(envMap, "INTERJECT_KEY", ""))
+	InterjectGrace = integer(envMap, "INTERJECT_GRACE", 20)
+	if InterjectGrace < 1 {
+		InterjectGrace = 1
+	}
 
 	PythonBin = str(envMap, "PYTHON_BIN", "python3")
 	PythonPath = str(envMap, "PYTHON_PATH", "")

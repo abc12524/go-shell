@@ -16,7 +16,10 @@ CLI 选项与 Python 版 `dp.py` 一一对应；`go-shell server` 启动 API 服
   `core.tools.envelope` 兼容层，部署目录无需携带 `core/`）
 - 存储：本地 SQLite 唯一读写源 + 在线 MySQL 幂等同步（uid 去重 / synced 标记 / 基线）
 - OpenViking：question/step 记忆注入、profile 索引、session 抓取与 commit
-- HTTP API：`/chat`（同步）、`/chat/stream`（SSE）、`/health`；事件协议与 Python 版一致
+- HTTP API：`/chat`（同步）、`/chat/stream`（SSE）、`/interject`（中途插话）、`/health`；
+  事件协议与 Python 版一致
+- 中途插话：一轮还在干活时追说的话，等它走到工具边界再进上下文（不杀进程、不丢中途工作），
+  由 `.env` 的 `INTERJECT_KEY`（8 位验证串）决定开不开、谁能用
 - 计费：DeepSeek/OpenCode Go 峰谷单价、费用与余额查询
 
 ## 服务端配置（.env）
@@ -61,8 +64,43 @@ curl -N -X POST http://127.0.0.1:8000/chat/stream \
 ```
 
 `/chat/stream` SSE 事件：`start/done/error/content/reasoning/tool_call/tool_result/
-usage/question/db/session/memory/tool_round/continuing/warning/search/log`，
-字段与 Python 版一致；`: heartbeat` 为保活注释。
+usage/question/db/session/memory/tool_round/continuing/warning/search/log/turn/interject`，
+字段与 Python 版一致；`: heartbeat` 为保活注释。`turn` 给出本轮 id 与插话开关，
+`interject` 表示某句话已经插进本轮（`{id, text, turn_id}`）。
+
+## 中途插话
+
+一轮还在跑的时候用户改主意，不必杀进程重来：把那句话递给本轮，等它走到**工具边界**
+（一批工具结果刚回来、下一次请求还没发）时作为 `user` 消息进入上下文，模型下一步就能
+看见并改道。插话按「新任务」处理，工具预算会重新计；这句话以 `<user_interjection>`
+包一层并照常落库（会话历史里就是用户说的）。
+
+```bash
+# .env：验证串必须正好 8 位，空或长度不符 = 功能关闭
+INTERJECT_KEY=1a2b3c4d
+INTERJECT_GRACE=20      # 等待落地的最长秒数
+
+curl -X POST http://127.0.0.1:8000/interject \
+  -H 'Content-Type: application/json' \
+  -H 'X-Interject-Key: 1a2b3c4d' \
+  -d '{"text":"先别删，改成只读检查"}'
+```
+
+| 返回 | 含义 | 客户端该怎么办 |
+|---|---|---|
+| `{"status":"injected","turn_id":"t7"}` | 已写进上下文并落库 | 不要重发，继续看这条流 |
+| `{"status":"timeout"}` | 还没走到工具边界（多卡在长命令上） | 按新消息重发 |
+| `{"status":"expired"}` | 这一轮已结束，没赶上 | 按新消息重发 |
+| `{"status":"idle"}`（409） | 当前没有正在跑的轮次 | 直接发新消息 |
+
+鉴权：只要 `INTERJECT_KEY` 是 8 位就开门，客户端必须带**同样的**值（请求头
+`X-Interject-Key`，或 body 的 `key`），否则 403。`GET /interject/status` 返回
+`{enabled, key_len, grace, turn_id}`，客户端可先问一句再决定走插话还是重发。
+
+落点为什么只能在**整批**工具结果之后：夹在两批并行 `function_call_output` 中间会留下
+没有 output 的孤立 `function_call`，Responses 与 Chat Completions 都 400，而且它已写进
+历史，之后每轮重放都会再错一次。同一原因，插话落不了地时这里不硬杀本轮——没有工具调用
+的那一轮根本没有边界可落，`/interject` 会如实回 `timeout`，让客户端重发。
 
 ## 与 Python 版的差异
 
@@ -70,3 +108,6 @@ usage/question/db/session/memory/tool_round/continuing/warning/search/log`，
 - skill 执行为 `PYTHON_BIN` 子进程：runner 经 `//go:embed` 内嵌进二进制（运行时写临时文件），
   `core.tools.envelope` 兼容层由 runner 在内存注入（部署目录无需 runner.py 与 core/）
 - 终端渲染为简化版（无 rich 面板）；`client/dp_client.py` 客户端未复刻（用 curl 或后续补）
+- 插话不走「父进程写子进程 stdin」那条管道（Python 版需要，因为 turn 在子进程里）：
+  go-shell 引擎就在本进程，`internal/interject` 用轮次注册表 + 队列实现同样语义，
+  回执（`injected`）仍然只在**落库之后**才发出

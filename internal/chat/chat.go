@@ -15,6 +15,7 @@ import (
 	"go-shell/internal/config"
 	"go-shell/internal/db"
 	"go-shell/internal/events"
+	"go-shell/internal/interject"
 	"go-shell/internal/llm"
 	"go-shell/internal/recall"
 	"go-shell/internal/tools"
@@ -310,6 +311,16 @@ func buildSystemPrompt() string {
 func RunTurn(ctx context.Context, opts *Options, sink events.Sink) (string, error) {
 	askedAt := time.Now()
 
+	// 登记本轮：/interject 的插话目标。defer 保证任何返回路径都会注销，
+	// 否则残留的 turn 会让插话被投进一个已经没人消费的队列（客户端一直等到超时）。
+	turn := interject.Begin("")
+	ctx = interject.WithTurn(ctx, turn)
+	defer func() {
+		if dropped := turn.End(); dropped > 0 {
+			events.Warning(sink, fmt.Sprintf("有 %d 条中途插话没赶上工具边界，未能插入本轮", dropped), "interject_dropped")
+		}
+	}()
+
 	// -k/-m：覆盖并写回 .env
 	updates := map[string]string{}
 	if opts.APIKey != "" {
@@ -344,6 +355,8 @@ func RunTurn(ctx context.Context, opts *Options, sink events.Sink) (string, erro
 		return "", fmt.Errorf("%s", errMsg)
 	}
 	events.Session(sink, map[bool]string{true: "new", false: "resume"}[isNew], sessionID)
+	turn.SetSession(sessionID)
+	events.Turn(sink, turn.ID, interject.Enabled())
 
 	ovSessionID := ""
 	if config.OVCapture {
