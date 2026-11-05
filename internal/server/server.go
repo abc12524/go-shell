@@ -236,8 +236,23 @@ func handlerStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	// 非对话动作：一次性输出文本为 log 事件后 done
-	if opts.Question == "" && (opts.ShowSkills || opts.HubAction != "" || opts.ListSessions) {
+	if opts.Question == "" && (opts.ShowSkills || opts.HubAction != "" || opts.ListSessions || opts.New) {
 		text, ok := runAction(opts)
+		if opts.New && opts.HubAction == "" && !opts.ShowSkills && !opts.ListSessions {
+			// 只开新会话不对话（远程客户端 -h 别名 -n 走这里）
+			if err := chat.EnsureDB(nil); err != nil {
+				fmt.Fprint(w, sseEvent("error", map[string]any{"error": err.Error(), "code": "internal"}))
+				flusher.Flush()
+				return
+			}
+			sessionID, _, errMsg := chat.ResolveSession(opts)
+			if errMsg != "" {
+				fmt.Fprint(w, sseEvent("error", map[string]any{"error": errMsg, "code": "bad_request"}))
+				flusher.Flush()
+				return
+			}
+			text, ok = fmt.Sprintf("已开启新会话：%s\n", sessionID), true
+		}
 		if !ok {
 			fmt.Fprint(w, sseEvent("error", map[string]any{"error": text, "code": "process_error"}))
 		} else {
@@ -405,6 +420,7 @@ func Run() error {
 	}
 
 	addr := fmt.Sprintf("%s:%d", config.ServerHost, config.ServerPort)
+	fmt.Printf("配置：%s\n数据：%s\n", config.EnvPath, config.DataDir)
 	fmt.Printf("shell-tool API (go) 监听 http://%s  （SERVER_HOST=%s SERVER_PORT=%d）\n",
 		addr, config.ServerHost, config.ServerPort)
 	if config.AccessKeyEnabled() {

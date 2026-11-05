@@ -1,7 +1,14 @@
 // Package config：.env 加载 + 全局配置（对应 Python core/config.py）
 //
 // 配置解析优先级与 python-dotenv 一致：真实环境变量 > .env 文件。
-// 新增服务端配置：SERVER_HOST（绑定 IP，127.0.0.1 或 0.0.0.0）、SERVER_PORT。
+//
+// 配置根（ConfigHome）决定 go.config、data/、skill/ 的默认位置，查找顺序：
+//
+//	-c/--config 指定 > GO_SHELL_HOME > XDG_CONFIG_HOME > ~/.config/go-shell（存在 go.config）
+//	> <二进制目录>/.env（老部署）> 都没有则在 ~/.config/go-shell 生成
+//
+// 即 ~/.config/go-shell/{go.config, data/, skill/} 优先；老部署（配置和数据都在
+// 二进制目录）行为不变，不会被"搬家"。DATA_DIR / SKILL_DIR 可单独覆盖。
 package config
 
 import (
@@ -15,12 +22,20 @@ import (
 )
 
 var (
+	// ProjectRoot 二进制所在目录（相对路径基准、recall peer 标识用）。
 	ProjectRoot string
-	EnvPath     string
+	// ConfigHome 配置根：go.config / data / skill 默认都放这里。
+	ConfigHome string
+	// EnvPath 实际加载的配置文件路径。
+	EnvPath string
 
 	// ConfigOverride 由 CLI -c/--config 指定的配置文件路径（main 在 Load 前设置）。
-	// 非空时 EnvPath 用它替代默认的 <二进制目录>/.env；-k/-m 写回也落到该文件。
+	// 非空时 EnvPath 用它替代默认位置；-k/-m 写回也落到该文件。
 	ConfigOverride string
+
+	// exampleConfig 由 main 通过 go:embed 注入的配置模板：全新机器只有二进制时
+	// 也能生成一份完整可用的 go.config（不再依赖 exe 旁边有 .env.example）。
+	exampleConfig string
 
 	// ===== LLM =====
 	APIKey        string
@@ -81,6 +96,16 @@ var (
 	ServerHost string // 127.0.0.1 或 0.0.0.0
 	ServerPort int
 
+	// ===== 远程客户端（go-shell -h <别名>）=====
+	// RemoteHosts 别名 → 目标（REMOTE_HOSTS 解析结果）
+	RemoteHosts map[string]RemoteTarget
+	// RemoteHost/RemotePort/RemoteKey 是 `-h` 不带别名时用的默认远程目标
+	RemoteHost string
+	RemotePort int
+	RemoteKey  string
+	// RemoteTimeout 建连与健康检查的超时秒数（流式对话本身不设总超时）
+	RemoteTimeout int
+
 	// AccessKey 访问 API 服务的全局验证码：至少 8 位，长度没有上限。
 	// 配了就强制校验（只认请求头 Authorization: Bearer <code>，不用 query / 自定义头），
 	// 空或短于 8 位 = 不校验（仅本机/内网自用），启动时打印告警。
@@ -96,8 +121,8 @@ var (
 	PythonBin string
 
 	// ===== 目录（相对路径按 ProjectRoot 解析）=====
-	DataDir    string // 数据目录（SQLite 默认落这里；默认 <root>/data）
-	SkillDirCfg string // skill 脚本目录（默认 <root>/skill）
+	DataDir     string // 数据目录（SQLite 默认落这里；默认 <配置根>/data）
+	SkillDirCfg string // skill 脚本目录（默认 <配置根>/skill）
 
 	MaxAPIAttempts int
 )
@@ -118,6 +143,64 @@ func resolveRoot() string {
 	}
 	wd, _ := os.Getwd()
 	return wd
+}
+
+// resolveHome 默认配置根：GO_SHELL_HOME > XDG_CONFIG_HOME/go-shell > ~/.config/go-shell
+func resolveHome() string {
+	if v := strings.TrimSpace(os.Getenv("GO_SHELL_HOME")); v != "" {
+		return absPath(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); v != "" {
+		return filepath.Join(absPath(v), "go-shell")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".config", "go-shell")
+	}
+	return ProjectRoot
+}
+
+func absPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
+// SetExampleConfig 注入配置模板（main 里 //go:embed .env.example）。
+// 必须在 Load 之前调用；不注入时退回内置最小模板。
+func SetExampleConfig(text string) { exampleConfig = text }
+
+const minimalConfig = `DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+
+# 服务端：绑定的 IP 与端口（0.0.0.0 可被局域网访问）
+SERVER_HOST=127.0.0.1
+SERVER_PORT=8000
+API_ACCESS_KEY=
+
+# 远程主机（客户端模式 -h 使用）：别名=地址:端口:访问码，逗号分隔多个
+REMOTE_HOSTS=
+REMOTE_HOST=
+REMOTE_PORT=8000
+REMOTE_KEY=
+`
+
+// ensureConfigFile 写出配置模板
+func ensureConfigFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	content := exampleConfig
+	if strings.TrimSpace(content) == "" {
+		content = minimalConfig
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 // parseDotenv 解析 .env 内容为键值对（支持 export 前缀、引号、双引号内 \n 转义）
@@ -212,25 +295,46 @@ func InferProvider(baseURL string) string {
 	return "deepseek"
 }
 
-// Load 加载 .env 与环境变量到全局配置。幂等，可重复调用。
+// Load 加载配置到全局变量。幂等，可重复调用。
+//
+// 配置根查找：-c > GO_SHELL_HOME/XDG 下的 go.config > <二进制目录>/.env > 生成 go.config。
+// 老部署（二进制目录有 .env）继续用它，配置与数据都不搬家。
 func Load() {
 	ProjectRoot = resolveRoot()
-	if ConfigOverride != "" {
-		abs, err := filepath.Abs(ConfigOverride)
-		if err != nil {
-			abs = ConfigOverride
-		}
-		EnvPath = abs
+	home := resolveHome()
+	exeEnv := filepath.Join(ProjectRoot, ".env")
+
+	switch {
+	case ConfigOverride != "":
+		ConfigHome = filepath.Dir(absPath(ConfigOverride))
+	case fileExists(filepath.Join(home, "go.config")):
+		ConfigHome = home
+	case fileExists(exeEnv):
+		ConfigHome = ProjectRoot
+	default:
+		ConfigHome = home
+	}
+
+	switch {
+	case ConfigOverride != "":
+		EnvPath = absPath(ConfigOverride)
 		if _, err := os.Stat(EnvPath); err != nil {
 			fmt.Fprintf(os.Stderr, "配置文件不存在或不可读：%s\n", EnvPath)
 			os.Exit(1)
 		}
-	} else {
-		EnvPath = filepath.Join(ProjectRoot, ".env")
-		if _, err := os.Stat(EnvPath); os.IsNotExist(err) {
-			if example, err2 := os.ReadFile(filepath.Join(ProjectRoot, ".env.example")); err2 == nil {
-				_ = os.WriteFile(EnvPath, example, 0o644)
-			}
+	case ConfigHome == home:
+		EnvPath = filepath.Join(ConfigHome, "go.config")
+	default:
+		EnvPath = filepath.Join(ConfigHome, ".env")
+	}
+
+	if !fileExists(EnvPath) {
+		_ = os.MkdirAll(filepath.Join(ConfigHome, "data"), 0o755)
+		_ = os.MkdirAll(filepath.Join(ConfigHome, "skill"), 0o755)
+		if err := ensureConfigFile(EnvPath); err != nil {
+			fmt.Fprintf(os.Stderr, "生成默认配置失败：%v\n", err)
+		} else if ConfigHome == home {
+			fmt.Fprintf(os.Stderr, "已生成默认配置：%s（数据与 skill 同级）\n", EnvPath)
 		}
 	}
 	data, err := os.ReadFile(EnvPath)
@@ -294,7 +398,7 @@ func Load() {
 	SkillHubToken = str(envMap, "SKILL_HUB_TOKEN", "")
 
 	DBOnline = boolean(envMap, "DB_ONLINE", true)
-	DataDir = resolveDir(envMap, "DATA_DIR", filepath.Join(ProjectRoot, "data"))
+	DataDir = resolveDir(envMap, "DATA_DIR", filepath.Join(ConfigHome, "data"))
 	SQLitePath = str(envMap, "SQLITE_DB_PATH", filepath.Join(DataDir, "shell_tool.db"))
 
 	MySQLHost = str(envMap, "MYSQL_HOST", "")
@@ -306,6 +410,16 @@ func Load() {
 	ServerHost = str(envMap, "SERVER_HOST", "127.0.0.1")
 	ServerPort = integer(envMap, "SERVER_PORT", 8000)
 
+	// 远程客户端：别名表 + 默认目标
+	RemoteHosts = parseRemoteHosts(str(envMap, "REMOTE_HOSTS", ""))
+	RemoteHost = strings.TrimSpace(str(envMap, "REMOTE_HOST", ""))
+	RemotePort = integer(envMap, "REMOTE_PORT", 8000)
+	RemoteKey = strings.TrimSpace(str(envMap, "REMOTE_KEY", ""))
+	RemoteTimeout = integer(envMap, "REMOTE_TIMEOUT", 15)
+	if RemoteTimeout < 1 {
+		RemoteTimeout = 1
+	}
+
 	// 访问口令：API 服务的全局验证码，至少 8 位（太短等于没配，避免弱口令半开）
 	AccessKey = strings.TrimSpace(str(envMap, "API_ACCESS_KEY", ""))
 	InterjectGrace = integer(envMap, "INTERJECT_GRACE", 20)
@@ -314,7 +428,7 @@ func Load() {
 	}
 
 	PythonBin = str(envMap, "PYTHON_BIN", "python3")
-	SkillDirCfg = resolveDir(envMap, "SKILL_DIR", filepath.Join(ProjectRoot, "skill"))
+	SkillDirCfg = resolveDir(envMap, "SKILL_DIR", filepath.Join(ConfigHome, "skill"))
 
 	MaxAPIAttempts = integer(envMap, "MAX_API_ATTEMPTS", 4)
 	if MaxAPIAttempts < 1 {
@@ -346,7 +460,7 @@ func CheckAccessKey(given string) bool {
 	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(given)), []byte(AccessKey)) == 1
 }
 
-// UpdateEnv 把配置写回 .env（已有则替换该行，否则追加），并同步内存配置。
+// UpdateEnv 把配置写回配置文件（已有则替换该行，否则追加），并同步内存配置。
 // 供 CLI -k/-m 使用：本次进程立即生效，后续进程（含 server）也读取新值。
 func UpdateEnv(updates map[string]string) error {
 	var lines []string

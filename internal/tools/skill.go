@@ -241,18 +241,18 @@ func executeSkill(name string, arguments map[string]any) string {
 	// runner 把 argv[1] 加进 sys.path 后按包路径导入模块。默认 skill 目录就叫
 	// skill/，模块路径 skill.<名>.skill；配置了自定义 SKILL_DIR 时以目录名作
 	// 包前缀（如 my_skills.<名>.skill），并把该目录的父目录加入 sys.path。
-	sysPathDir := config.ProjectRoot
-	module := "skill." + name + ".skill"
-	if sd := SkillDir(); sd != filepath.Join(config.ProjectRoot, "skill") {
-		module = filepath.Base(sd) + "." + name + ".skill"
-		sysPathDir = filepath.Dir(sd)
-	}
+	// 目录名会当 Python 包名用，建议字母/数字/下划线。
+	skillPath := SkillDir()
+	sysPathDir := filepath.Dir(skillPath)
+	module := filepath.Base(skillPath) + "." + name + ".skill"
 	cmdArgs := []string{
 		runnerPath,
 		sysPathDir, module, string(argsJSON),
 	}
 	cmd := exec.Command(config.PythonBin, cmdArgs...)
-	cmd.Dir = config.ProjectRoot
+	// cwd 跟着 skill 根走：新布局下配置根（含 go.config 与 data/）就是 sysPathDir，
+	// skill 里用相对路径找 data 时能命中；老部署 sysPathDir 仍是二进制目录，行为不变
+	cmd.Dir = sysPathDir
 	env := os.Environ()
 	// PYTHON_BIN 带目录（如 /root/.venv/bin/python3）时，把解释器所在目录前置到
 	// 子进程 PATH：skill 内再调 python / pip 装的 CLI 工具时可命中同一环境

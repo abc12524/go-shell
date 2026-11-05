@@ -29,6 +29,7 @@ type Options struct {
 	APIKey       string
 	Model        string
 	Question     string
+	Remote       string // 非空 = 远程客户端模式：别名/地址（-h），"default" 用默认远程
 
 	SkillStatus [2]string // [名称, enable|disable]
 	ShowSkills  bool
@@ -45,12 +46,17 @@ const UsageText = `使用方法：go-shell [选项] [问题]
   -S, --skill [名称] [enable|disable] → 不带参数：列出全部 skill 及 status
   -I, --install [名称...] → 列出远程可装 skill / 安装指定 skill
   -D, --delete <名称...> → 删除已安装的本地 skill 文件夹
-  -k, --key <key>    → 覆盖 DEEPSEEK_API_KEY，并写回 .env
-  -m, --model <name> → 覆盖 DEEPSEEK_MODEL，并写回 .env
-  -c, --config <路径> → 指定配置文件（默认 <二进制目录>/.env）；-k/-m 写回同一文件
-  server         → 启动 HTTP API 服务（端口/绑定 IP 见 .env 的 SERVER_PORT/SERVER_HOST）
+  -k, --key <key>    → 覆盖 DEEPSEEK_API_KEY，并写回配置文件
+  -m, --model <name> → 覆盖 DEEPSEEK_MODEL，并写回配置文件
+  -c, --config <路径> → 指定配置文件（默认 ~/.config/go-shell/go.config）
+  -h, --host [别名|地址] → 远程客户端模式：连远端 go-shell server，本终端输出
+                     别名来自配置 REMOTE_HOSTS，也可直接写 192.168.30.181:8018；
+                     不带值用默认远程（REMOTE_HOST）。-n/-s/-S/-I/-D 同样发到远端
+  server         → 远程服务端模式：启动 HTTP API（端口/绑定 IP 见配置 SERVER_PORT/SERVER_HOST）
   不加参数       → 查看此帮助
-`
+
+三种模式：本机对话（默认） / server 提供接口 / -h 连接远端在本终端对话。
+配置与数据默认在 ~/.config/go-shell/{go.config, data/, skill/}。`
 
 // ParseArgs 解析命令行参数（对应 core/main.py parse_args）
 func ParseArgs(argv []string) (*Options, string) {
@@ -60,6 +66,14 @@ func ParseArgs(argv []string) (*Options, string) {
 	for i < len(argv) {
 		a := argv[i]
 		switch a {
+		case "-h", "--host":
+			if i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+				opts.Remote = argv[i+1]
+				i += 2
+			} else {
+				opts.Remote = "default"
+				i++
+			}
 		case "-n", "--new":
 			opts.New = true
 			i++
@@ -591,6 +605,35 @@ func HubText(action string, names []string) (string, int) {
 		return b.String(), failed
 	}
 	return "", 0
+}
+
+// RemoteArgs 把已解析的选项重建为 CLI 参数，透传给远程 server（-s/-S/-I/-D 这类动作）。
+// -n 走请求体的 new 字段、问题走 question 字段，不在这里重复。
+func RemoteArgs(o *Options) []string {
+	var args []string
+	switch {
+	case o.SessionID != "":
+		args = append(args, "-s", o.SessionID)
+	case o.ListSessions:
+		args = append(args, "-s")
+	}
+	switch {
+	case o.SkillStatus[0] != "":
+		args = append(args, "-S", o.SkillStatus[0], o.SkillStatus[1])
+	case o.ShowSkills:
+		args = append(args, "-S")
+	}
+	switch o.HubAction {
+	case "list":
+		args = append(args, "-I")
+	case "install":
+		args = append(args, "-I")
+		args = append(args, o.HubNames...)
+	case "delete":
+		args = append(args, "-D")
+		args = append(args, o.HubNames...)
+	}
+	return args
 }
 
 func contains(list []string, s string) bool {

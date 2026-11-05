@@ -1,12 +1,14 @@
 // go-shell — shell-tool 的 Go 实现（单二进制）
 //
 // 用法：
-//   go-shell [选项] [问题]   对话（同 Python dp.py）
-//   go-shell server          启动 HTTP API（SERVER_HOST/SERVER_PORT 在 .env）
+//   go-shell [选项] [问题]        本机对话（同 Python dp.py）
+//   go-shell server              远程服务端模式：启动 HTTP API（SERVER_HOST/SERVER_PORT）
+//   go-shell -h <别名> [问题]     远程客户端模式：连远端 server，内容在本终端输出
 package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/signal"
@@ -14,10 +16,17 @@ import (
 	"syscall"
 
 	"go-shell/internal/chat"
+	"go-shell/internal/client"
 	"go-shell/internal/config"
 	"go-shell/internal/events"
 	"go-shell/internal/server"
 )
+
+// exampleConfig 配置模板随二进制走：全新机器上只有 go-shell 一个文件，
+// 首次启动也能在 ~/.config/go-shell/go.config 生成一份完整可用的配置。
+//
+//go:embed .env.example
+var exampleConfig string
 
 // pullConfigFlag 预扫描 -c/--config 指定配置文件（支持 `-c 路径` 与 `-c=路径`），
 // 返回剔除该选项后的参数。须在 config.Load 与 server 子命令判定之前执行。
@@ -44,6 +53,7 @@ func pullConfigFlag(args []string) []string {
 
 func main() {
 	args := pullConfigFlag(os.Args[1:])
+	config.SetExampleConfig(exampleConfig)
 	config.Load()
 	if len(args) > 0 && (args[0] == "server" || args[0] == "serve") {
 		if err := server.Run(); err != nil {
@@ -58,6 +68,12 @@ func main() {
 		t := events.NewTerminal()
 		events.Warning(t, errMsg, "")
 		os.Exit(1)
+	}
+
+	// -h/--host：远程客户端模式（引擎在远端，本终端只做渲染）
+	if opts.Remote != "" {
+		runRemote(opts)
+		return
 	}
 
 	// -S/--skill 无参数：列出全部 skill
@@ -133,4 +149,45 @@ func main() {
 		os.Exit(1)
 	}
 	_ = reply
+}
+
+// runRemote 远程客户端模式：连远端 /chat/stream，事件在本终端渲染。
+// 本进程不碰本地数据库、不需要 DEEPSEEK_API_KEY（一切都在远端执行）。
+func runRemote(opts *chat.Options) {
+	hasAction := opts.ShowSkills || opts.HubAction != "" || opts.ListSessions || opts.SkillStatus[0] != ""
+	if opts.Question == "" && !opts.New && !hasAction {
+		fmt.Print(chat.UsageText)
+		return
+	}
+	tgt, err := config.ResolveRemote(opts.Remote)
+	if err != nil {
+		events.Warning(events.NewTerminal(), err.Error(), "remote_config")
+		os.Exit(1)
+	}
+	if opts.APIKey != "" || opts.Model != "" {
+		fmt.Fprintln(os.Stderr, "提示：远程模式不改远端配置，-k/-m 已忽略（到远端配置文件里改）")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	sink := events.NewTerminal()
+	fmt.Printf("→ 远程 %s\n", tgt.Label())
+	if err := client.Ping(ctx, tgt); err != nil {
+		sink.Flush()
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	req := client.Request{Question: opts.Question, New: opts.New, Args: chat.RemoteArgs(opts)}
+	err = client.Run(ctx, tgt, req, sink, os.Stdout)
+	sink.Flush()
+	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintln(os.Stderr, "\n已中断")
+			os.Exit(130)
+		}
+		fmt.Fprintf(os.Stderr, "远程调用失败：%v\n", err)
+		os.Exit(1)
+	}
 }
