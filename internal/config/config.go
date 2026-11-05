@@ -171,6 +171,11 @@ func fileExists(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
 // SetExampleConfig 注入配置模板（main 里 //go:embed .env.example）。
 // 必须在 Load 之前调用；不注入时退回内置最小模板。
 func SetExampleConfig(text string) { exampleConfig = text }
@@ -306,7 +311,14 @@ func Load() {
 
 	switch {
 	case ConfigOverride != "":
-		ConfigHome = filepath.Dir(absPath(ConfigOverride))
+		// 配置与数据不一定同处（如 -c /etc/go-shell/go.conf + 二进制在 /opt/go-shell）：
+		// 只有配置文件所在目录里确实有 data/ 或 skill/ 才把它当配置根，否则跟二进制目录
+		dir := filepath.Dir(absPath(ConfigOverride))
+		if dirExists(filepath.Join(dir, "data")) || dirExists(filepath.Join(dir, "skill")) {
+			ConfigHome = dir
+		} else {
+			ConfigHome = ProjectRoot
+		}
 	case fileExists(filepath.Join(home, "go.config")):
 		ConfigHome = home
 	case fileExists(exeEnv):

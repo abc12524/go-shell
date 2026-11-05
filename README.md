@@ -42,6 +42,9 @@ cp .env.example .env          # 首次：填 API Key 等
 Windows 同为 `%USERPROFILE%\.config\go-shell`。配置模板 `//go:embed` 在二进制里，
 机器上只有 `go-shell` 一个文件也能生成完整配置。
 
+`-c` 只改「配置文件在哪」；`data/`、`skill/` 仍跟二进制目录走，除非该配置目录里本来就有
+`data/` 或 `skill/`（此时它也算配置根）。要完全分开就用 `DATA_DIR` / `SKILL_DIR`。
+
 ## 功能
 
 - LLM 双协议：DeepSeek Responses API / OpenAI 兼容 Chat Completions，流式输出
