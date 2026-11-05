@@ -207,7 +207,7 @@ func termIsTerminal(fd int) bool { return term.IsTerminal(fd) }
 func (l *liveRegion) render() string {
 	text := l.buf.String()
 	if l.kind == "content" {
-		out := renderMarkdown(text, l.t.streamWidth())
+		out := renderBodyMarkdown(text, l.t.streamWidth())
 		// glamour 对超长无空格 token（URL 等）不折行，终端会软换行，
 		// 导致逻辑行数 < 显示行数、重绘光标算术漂移啃掉上方内容。
 		// 这里按显示宽度再硬折一次，保证逻辑行 == 终端显示行。

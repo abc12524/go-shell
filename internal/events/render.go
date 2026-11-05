@@ -377,15 +377,39 @@ type mdTable struct {
 type mdSeg struct {
 	text  string
 	table *mdTable
+	raw   string // 表格段的原始 Markdown 行，放不下时交回 glamour 折行渲染
 }
 
 // renderPanelMarkdown 面板内 Markdown：表格自绘，其余交给 glamour。
 // 宽度由面板给定（不随内容浮动），表格放不下就地截断而不是把框撑宽。
 func renderPanelMarkdown(text string, width int) string {
+	return renderWithTables(text, width, false)
+}
+
+// renderBodyMarkdown 正文（流式）Markdown：表格同样自绘，列宽按内容自适应。
+// glamour 的表格按容器宽度分列，两列的窄表也会被撑到满宽；正文改成自绘后，
+// 表格宽度只由内容决定，和面板内保持一致的观感。
+// 表格本身比可用宽度还宽时退回 glamour 折行渲染——自绘在这种情况只能靠 …
+// 截断单元格，信息会丢。
+// 非 TTY（管道 / 重定向）下不介入，原样返回，保持 `go-shell "…" | cat` 的输出不变。
+func renderBodyMarkdown(text string, width int) string {
+	if !colorEnabled {
+		return text
+	}
+	return renderWithTables(text, width, true)
+}
+
+// renderWithTables 表格自绘 + 其余段落走 glamour。
+// fallbackWide=true（正文）时，放不下的表格交回 glamour，保住单元格的完整内容。
+func renderWithTables(text string, width int, fallbackWide bool) string {
 	segs := splitMarkdownTables(text)
 	out := make([]string, 0, len(segs))
 	for _, s := range segs {
 		if s.table != nil {
+			if fallbackWide && tableLineWidth(tableWidths(s.table)) > width {
+				out = append(out, renderMarkdown(s.raw, width))
+				continue
+			}
 			out = append(out, strings.Join(renderTableBlock(s.table, width), "\n"))
 			continue
 		}
@@ -434,7 +458,7 @@ func splitMarkdownTables(text string) []mdSeg {
 			continue
 		}
 		flush()
-		segs = append(segs, mdSeg{table: t})
+		segs = append(segs, mdSeg{table: t, raw: strings.Join(lines[i:j], "\n")})
 		i = j
 	}
 	flush()
