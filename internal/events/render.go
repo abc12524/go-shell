@@ -4,7 +4,8 @@
 //   - 工具调用/结果共用一个圆角框（灰描边，出错时红描边 + ✗ 失败徽标，完成时 ✓ 完成）
 //   - 结果剥 {status,result} 信封：JSON 高亮 / Markdown 渲染 / 纯文本，按行与字符折叠
 //   - 用量三列表格：表头灰、数字列右对齐加粗、合计行加粗
-//   - 颜色用固定灰阶（ANSI256 244~249）而非 dim，浅色/深色终端都可读
+//   - 灰色只用于两处：思考过程（245 灰阶斜体）与未安装的 skill 名；
+//     其余文字一律终端默认前景色（面板描边 246 灰属装饰边框）
 package events
 
 import (
@@ -31,17 +32,17 @@ import (
 var (
 	stAccent    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))   // bold cyan
 	stBold      = lipgloss.NewStyle().Bold(true)                                   // title
-	stMuted     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))            // grey58 次要文字
-	stHint      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))            // 表头/提示
+	stMuted     = lipgloss.NewStyle()                                              // 次要文字：正常色（灰只留给思考过程/未装 skill）
+	stHint      = lipgloss.NewStyle()                                              // 表头/提示：正常色
 	stOk        = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))              // green
 	stWarn      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))              // yellow
 	stErr       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))   // bold red
-	stKey       = lipgloss.NewStyle().Foreground(lipgloss.Color("249"))            // kv.key 灰阶键名
+	stKey       = lipgloss.NewStyle()                                              // kv 键名：正常色
 	stPanelTtl  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))   // panel.title
-	stSection   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))            // 框内分区标题
-	stThink     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true) // 思考过程
+	stSection   = lipgloss.NewStyle()                                              // 框内分区标题：正常色
+	stThink     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true) // 思考过程：唯一保留灰色的正文（灰阶斜体）
 	stNum       = lipgloss.NewStyle().Bold(true)                                   // 数字列
-	stBorderC   = lipgloss.Color("246")                                            // panel.border grey54
+	stBorderC   = lipgloss.Color("246")                                            // panel.border grey54（装饰边框）
 	stBorderErr = lipgloss.Color("1")                                              // 出错描边
 
 	// JSON 高亮：键 bold cyan / 字符串 green / 数字 yellow / 字面量 magenta
@@ -89,6 +90,10 @@ func AnsiMark(code, s string) string {
 // GreenMark 终端下返回绿色文本，否则原样（用于「已装」等状态标记）。
 // 用原始 ANSI 而非 lipgloss：不受 lipgloss 自身 TERM 档位检测影响，isatty 即生效。
 func GreenMark(s string) string { return AnsiMark("32", s) }
+
+// GreyMark 终端下返回灰阶文本（ANSI256 245），否则原样。
+// 灰色仅用于思考过程与未安装的 skill 名，不要挪作他用。
+func GreyMark(s string) string { return AnsiMark("245", s) }
 
 func sty(st lipgloss.Style, s string) string {
 	if !colorEnabled {

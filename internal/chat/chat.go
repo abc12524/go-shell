@@ -497,11 +497,16 @@ func HubText(action string, names []string) (string, int) {
 		for _, s := range skills {
 			name, _ := s["name"].(string)
 			desc, _ := s["description"].(string)
+			installed, _ := s["installed"].(bool)
+			// 未安装的 skill 名显示为灰色（先按字节补齐再上色，避免 ANSI 序列破坏对齐）
+			nameCol := fmt.Sprintf("%-20s", name)
 			mark := "未装"
-			if installed, _ := s["installed"].(bool); installed {
+			if installed {
 				mark = events.GreenMark("已装")
+			} else {
+				nameCol = events.GreyMark(nameCol)
 			}
-			fmt.Fprintf(&b, "  %-20s · %s · %s\n", name, mark, desc)
+			fmt.Fprintf(&b, "  %s · %s · %s\n", nameCol, mark, desc)
 		}
 		b.WriteString("安装  go-shell -I <名称>\n")
 		return b.String(), 0
