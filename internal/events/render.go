@@ -352,6 +352,335 @@ func renderMarkdown(text string, width int) string {
 	return strings.Trim(unmaskTildes(out), "\n")
 }
 
+// ---------- 适配宽度 + 自绘表格 ----------
+//
+// glamour 的表格按「可用宽度比例」分配列宽：宽度够时把表铺满，不够时直接把
+// 单元格硬折（pausedU/P、100./0%），表格塌成一条条竖线。所以面板内的表格改成
+// 自绘：先按内容算列宽，放不下就压最宽的那一列并用 … 截断，每行恒定一行、
+// 列与列永远对齐；面板宽度也跟着放宽到表格需要的宽度（上限为终端宽）。
+
+// mdTableRowRe 粗判表格行（以 | 开头并以 | 结尾）
+var mdTableRowRe = regexp.MustCompile(`(?m)^\s{0,3}\|.*\|\s*$`)
+
+var mdTableSepCellRe = regexp.MustCompile(`^:?-{1,}:?$`)
+
+var mdLinkRe = regexp.MustCompile(`\[([^\]]*)\]\(([^)]*)\)`)
+
+// mdTable 面板内自绘表格的数据
+type mdTable struct {
+	hdr  []string
+	dir  []int // 0 左 1 右 2 居中
+	rows [][]string
+}
+
+// mdSeg 文本片段：table 非空表示这一段是表格，否则走 glamour
+type mdSeg struct {
+	text  string
+	table *mdTable
+}
+
+// panelLayout 决定一块内容在面板里的渲染宽度。
+// base 是基准内宽，max 是允许放宽的上限（终端宽 - 面板边框）。
+type panelLayout struct {
+	base int
+	max  int
+	used int
+}
+
+func newPanelLayout(base, max int) *panelLayout {
+	if base < 20 {
+		base = 20
+	}
+	if max < base {
+		max = base
+	}
+	return &panelLayout{base: base, max: max}
+}
+
+// use 记录实际用到的渲染宽度，面板据此取宽
+func (p *panelLayout) use(w int) {
+	if w > p.used {
+		p.used = w
+	}
+}
+
+// width 返回这块内容实际需要的内宽
+func (p *panelLayout) width() int {
+	if p.used > p.base {
+		return p.used
+	}
+	return p.base
+}
+
+// md 按需放宽后渲染 Markdown（表格自绘，其余交给 glamour）
+func (p *panelLayout) md(text string) string {
+	w := p.base
+	segs := splitMarkdownTables(text)
+	if n := segsNaturalWidth(segs); n > w {
+		w = n
+		if w > p.max {
+			w = p.max // 自然宽度超过终端：压到最大宽度，再宽终端会二次折行
+		}
+		p.use(w)
+	}
+	out := make([]string, 0, len(segs))
+	for _, s := range segs {
+		if s.table != nil {
+			out = append(out, strings.Join(renderTableBlock(s.table, w), "\n"))
+			continue
+		}
+		if strings.TrimSpace(s.text) == "" {
+			continue
+		}
+		out = append(out, renderMarkdown(s.text, w))
+	}
+	return strings.Join(out, "\n\n")
+}
+
+// splitMarkdownTables 把文本切成「普通 Markdown」与「表格」片段
+func splitMarkdownTables(text string) []mdSeg {
+	lines := strings.Split(text, "\n")
+	var segs []mdSeg
+	var buf []string
+	inFence := false
+	flush := func() {
+		if len(buf) > 0 {
+			segs = append(segs, mdSeg{text: strings.Join(buf, "\n")})
+			buf = nil
+		}
+	}
+	for i := 0; i < len(lines); {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			buf = append(buf, lines[i])
+			i++
+			continue
+		}
+		// 围栏代码块里的「| … |」是代码，不能当表格吃掉
+		if inFence || !mdTableRowRe.MatchString(lines[i]) {
+			buf = append(buf, lines[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(lines) && mdTableRowRe.MatchString(lines[j]) {
+			j++
+		}
+		t, ok := parseMarkdownTable(lines[i:j])
+		if !ok {
+			buf = append(buf, lines[i:j]...)
+			i = j
+			continue
+		}
+		flush()
+		segs = append(segs, mdSeg{table: t})
+		i = j
+	}
+	flush()
+	return segs
+}
+
+// parseMarkdownTable 解析一段连续表格行；第二行必须是分隔行（|---|---|）
+func parseMarkdownTable(lines []string) (*mdTable, bool) {
+	if len(lines) < 2 {
+		return nil, false
+	}
+	hdr, ok := splitTableRow(lines[0])
+	if !ok {
+		return nil, false
+	}
+	sep, ok := splitTableRow(lines[1])
+	if !ok || !isTableSep(sep) {
+		return nil, false
+	}
+	t := &mdTable{hdr: hdr, dir: make([]int, len(hdr))}
+	for i, c := range sep {
+		if i >= len(t.dir) {
+			break
+		}
+		switch {
+		case strings.HasPrefix(c, ":") && strings.HasSuffix(c, ":"):
+			t.dir[i] = 2
+		case strings.HasSuffix(c, ":"):
+			t.dir[i] = 1
+		}
+	}
+	for _, ln := range lines[2:] {
+		if cells, ok := splitTableRow(ln); ok {
+			t.rows = append(t.rows, cells)
+		}
+	}
+	return t, true
+}
+
+func splitTableRow(line string) ([]string, bool) {
+	s := strings.TrimSpace(line)
+	if !strings.HasPrefix(s, "|") || !strings.HasSuffix(s, "|") {
+		return nil, false
+	}
+	s = strings.TrimSuffix(strings.TrimPrefix(s, "|"), "|")
+	parts := strings.Split(s, "|")
+	cells := make([]string, len(parts))
+	for i, c := range parts {
+		cells[i] = plainCell(c)
+	}
+	return cells, true
+}
+
+func isTableSep(cells []string) bool {
+	if len(cells) == 0 {
+		return false
+	}
+	for _, c := range cells {
+		if !mdTableSepCellRe.MatchString(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// plainCell 去掉单元格行内标记：自绘表格不解析 Markdown，留着会露出 ** 与 `
+func plainCell(s string) string {
+	s = mdLinkRe.ReplaceAllString(s, "$1")
+	s = strings.ReplaceAll(s, "**", "")
+	s = strings.ReplaceAll(s, "`", "")
+	s = strings.ReplaceAll(s, "~~", "")
+	return strings.TrimSpace(s)
+}
+
+// tableWidths 列宽：取表头与各行的最大显示宽度
+func tableWidths(t *mdTable) []int {
+	w := make([]int, len(t.hdr))
+	for i, h := range t.hdr {
+		w[i] = dw(h)
+	}
+	for _, r := range t.rows {
+		for i := 0; i < len(w) && i < len(r); i++ {
+			if d := dw(r[i]); d > w[i] {
+				w[i] = d
+			}
+		}
+	}
+	return w
+}
+
+// tableLineWidth 整行宽度：每格两侧各 1 空格，格间 1 个 │
+func tableLineWidth(widths []int) int {
+	if len(widths) == 0 {
+		return 0
+	}
+	s := 0
+	for _, w := range widths {
+		s += w + 2
+	}
+	return s + len(widths) - 1
+}
+
+// segsNaturalWidth 表格不被压缩所需的最大宽度
+func segsNaturalWidth(segs []mdSeg) int {
+	best := 0
+	for _, s := range segs {
+		if s.table == nil {
+			continue
+		}
+		if w := tableLineWidth(tableWidths(s.table)); w > best {
+			best = w
+		}
+	}
+	return best
+}
+
+// renderTableBlock 自绘定宽表格：一行一条记录、列线永远对齐。
+// 放不下时先只压长文本列（名称这类），短列（大小/进度/时间）保持完整；
+// 连这一步都不够，才整体压缩，并在末尾提示终端太窄。
+func renderTableBlock(t *mdTable, budget int) []string {
+	widths := tableWidths(t)
+	n := len(widths)
+	if n == 0 {
+		return nil
+	}
+	// 第一阶段的下限：短列（≤12）不压，长列至少留 12，长文本列吸收截断
+	mins := make([]int, n)
+	for i := range mins {
+		if widths[i] <= 12 {
+			mins[i] = widths[i]
+		} else {
+			mins[i] = 12
+		}
+		if h := dw(t.hdr[i]); h > mins[i] {
+			mins[i] = h
+		}
+		if mins[i] > widths[i] {
+			mins[i] = widths[i]
+		}
+	}
+	shrink := func(floor func(i int) int) bool {
+		for tableLineWidth(widths) > budget {
+			idx := -1
+			for i, w := range widths {
+				if w > floor(i) && (idx < 0 || w > widths[idx]) {
+					idx = i
+				}
+			}
+			if idx < 0 {
+				return false
+			}
+			widths[idx]--
+		}
+		return true
+	}
+	forced := false
+	if !shrink(func(i int) int { return mins[i] }) {
+		forced = true
+		// 第二阶段：连下限都放不下（列太多），退到表头宽度，再不行退到 4
+		shrink(func(i int) int {
+			if h := dw(t.hdr[i]); h > 4 {
+				return h
+			}
+			return 4
+		})
+	}
+
+	renderRow := func(cells []string) string {
+		parts := make([]string, n)
+		for i := 0; i < n; i++ {
+			c := ""
+			if i < len(cells) {
+				c = cells[i]
+			}
+			c = fitWidth(c, widths[i])
+			pad := widths[i] - dw(c)
+			switch t.dir[i] {
+			case 1:
+				c = strings.Repeat(" ", pad) + c
+			case 2:
+				l := pad / 2
+				c = strings.Repeat(" ", l) + c + strings.Repeat(" ", pad-l)
+			default:
+				c = c + strings.Repeat(" ", pad)
+			}
+			parts[i] = " " + c + " "
+		}
+		return strings.Join(parts, "│")
+	}
+
+	out := make([]string, 0, len(t.rows)+3)
+	out = append(out, renderRow(t.hdr))
+	sep := make([]string, n)
+	for i := range sep {
+		sep[i] = strings.Repeat("─", widths[i]+2)
+	}
+	out = append(out, strings.Join(sep, "┼"))
+	for _, r := range t.rows {
+		out = append(out, renderRow(r))
+	}
+	if forced {
+		out = append(out, sty(stMuted, "… 终端宽度不足，表格已压缩显示"))
+	}
+	return out
+}
+
 // ---------- ANSI 感知硬换行 / 填充 ----------
 
 // hardWrap 按显示宽度硬换行，ANSI 转义序列不占宽度
@@ -716,7 +1045,7 @@ func isMarkdown(text string) bool {
 }
 
 // autoParts 按内容自动选渲染：JSON → 高亮；Markdown → 渲染；其他 → 纯文本
-func autoParts(text string, maxLines, charLimit, width int, what string) []string {
+func autoParts(text string, maxLines, charLimit int, lay *panelLayout, what string) []string {
 	raw := strings.TrimSpace(text)
 	if raw == "" {
 		return []string{sty(stMuted, "（空）")}
@@ -729,7 +1058,7 @@ func autoParts(text string, maxLines, charLimit, width int, what string) []strin
 	}
 	if isMarkdown(raw) {
 		body, note := clipped(raw, charLimit, maxLines, what)
-		md := renderMarkdown(body, width)
+		md := lay.md(body)
 		parts := strings.Split(md, "\n")
 		if note != "" {
 			parts = append(parts, sty(stMuted, note))
@@ -761,7 +1090,7 @@ func metaLine(items [][2]string) string {
 	return line
 }
 
-func payloadParts(text string, maxLines, charLimit, width int) []string {
+func payloadParts(text string, maxLines, charLimit int, lay *panelLayout) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return []string{sty(stMuted, "（空）")}
@@ -769,13 +1098,13 @@ func payloadParts(text string, maxLines, charLimit, width int) []string {
 	var env map[string]any
 	if err := json.Unmarshal([]byte(text), &env); err == nil {
 		if _, ok := env["status"]; ok {
-			return envelopeParts(env, maxLines, charLimit, width)
+			return envelopeParts(env, maxLines, charLimit, lay)
 		}
 	}
-	return autoParts(text, maxLines, charLimit, width, "结果 ")
+	return autoParts(text, maxLines, charLimit, lay, "结果 ")
 }
 
-func envelopeParts(env map[string]any, maxLines, charLimit, width int) []string {
+func envelopeParts(env map[string]any, maxLines, charLimit int, lay *panelLayout) []string {
 	status, _ := env["status"].(string)
 	result := env["result"]
 
@@ -824,7 +1153,7 @@ func envelopeParts(env map[string]any, maxLines, charLimit, width int) []string 
 			if budget < 2 {
 				budget = 2
 			}
-			parts = append(parts, autoParts(body, budget, charLimit, width, "结果 ")...)
+			parts = append(parts, autoParts(body, budget, charLimit, lay, "结果 ")...)
 		}
 		if len(parts) == 0 {
 			parts = append(parts, jsonView(env, charLimit, maxLines, 0, 0, "结果 ")...)
@@ -909,7 +1238,7 @@ func envelopeParts(env map[string]any, maxLines, charLimit, width int) []string 
 		if budget < 2 {
 			budget = 2
 		}
-		bp := autoParts(b[1], budget, charLimit, width, "结果 ")
+		bp := autoParts(b[1], budget, charLimit, lay, "结果 ")
 		if b[0] != "" && len(bodies) > 1 {
 			parts = append(parts, append([]string{sty(stMuted, b[0])}, bp...)...)
 		} else {

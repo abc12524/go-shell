@@ -299,6 +299,19 @@ func (t *Terminal) panelWidth() int {
 	return w
 }
 
+// maxPanelWidth 面板允许放宽到的上限：内容（表格）在基准宽度下放不下时，
+// 用满终端宽度，而不是把单元格按列宽硬折成竖条。留 1 列规避满行换行。
+func (t *Terminal) maxPanelWidth() int {
+	w := t.termWidth()
+	if w < 24 {
+		w = 24
+	}
+	if w < t.panelWidth() {
+		return t.panelWidth()
+	}
+	return w
+}
+
 func (t *Terminal) callKey(id, name string) string {
 	if id != "" {
 		return id
@@ -471,20 +484,25 @@ func (t *Terminal) Emit(evt map[string]any) {
 				}
 			}
 		}
+		panelW := t.panelWidth()
 		if !rendered {
 			if isErr {
 				parts = append(parts, sty(stErr, "错误"))
 			} else {
 				parts = append(parts, sty(stSection, "结果"))
 			}
-			parts = append(parts, payloadParts(output, resultMaxLines, resultMaxChars, t.panelWidth()-4)...)
+			// 内宽 = 面板宽 - 5（│ + 空格 + 内容 + 空格 + │）。这里原为 -4，
+			// 渲染出的一行比框内宽多 1 列，随后被 hardWrap 再折一次，表格行当场断裂。
+			lay := newPanelLayout(panelW-5, t.maxPanelWidth()-5)
+			parts = append(parts, payloadParts(output, resultMaxLines, resultMaxChars, lay)...)
+			panelW = lay.width() + 5 // 表格放不下时面板一起放宽
 		}
 		sub := "✓ 完成"
 		if isErr {
 			sub = "✗ 失败"
 		}
 		fmt.Println()
-		fmt.Println(drawPanel(parts, label, sub, isErr, t.panelWidth()))
+		fmt.Println(drawPanel(parts, label, sub, isErr, panelW))
 	case "tool_round":
 		// 上一轮若有调用没等到结果，先兜底打出来（与原版一致，不打印轮次分隔线）
 		t.stopLive()
