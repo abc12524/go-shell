@@ -88,7 +88,9 @@ curl -N -X POST http://127.0.0.1:8000/chat/stream \
 `/chat/stream` SSE 事件：`start/done/error/content/reasoning/tool_call/tool_result/
 usage/question/db/session/memory/tool_round/continuing/warning/search/log/turn/interject`，
 字段与 Python 版一致；`: heartbeat` 为保活注释。`turn` 给出本轮 id（插话可用它指定目标），
-`interject` 表示某句话已经插进本轮（`{id, text, turn_id}`）。
+**只有支持插话的版本才发 `turn`**，客户端据此判断能不能走 `/interject`（Python 版不发，
+所以那边插话做不了，只能等本轮结束再发）；`interject` 表示某句话已经插进本轮
+（`{id, text, turn_id}`）。
 
 ## 中途插话
 
