@@ -261,8 +261,10 @@ func executeSkill(name string, arguments map[string]any) string {
 	}
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
+	// skill 脚本若是 Windows 上的 python（或调了 cmd 工具），输出同样可能是 GBK
+	outText := toUTF8(string(out))
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
+		msg := strings.TrimSpace(outText)
 		if msg == "" {
 			msg = err.Error()
 		}
@@ -271,7 +273,7 @@ func executeSkill(name string, arguments map[string]any) string {
 		}
 		return envelope.Error(fmt.Sprintf("skill %s 执行失败 - %s", name, msg), "internal")
 	}
-	result := strings.TrimSpace(normalizeCRLF(string(out)))
+	result := strings.TrimSpace(normalizeCRLF(outText))
 	if result == "" {
 		return envelope.Error(fmt.Sprintf("skill %s 无输出", name), "internal")
 	}

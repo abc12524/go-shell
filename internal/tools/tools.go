@@ -153,8 +153,10 @@ func ExecuteSystemCommand(command string) string {
 		return envelope.Error("命令执行超时（1小时）", "timeout")
 	}
 
-	stdout := normalizeCRLF(cmd.Stdout.(*syncBuffer).String())
-	stderr := normalizeCRLF(cmd.Stderr.(*syncBuffer).String())
+	// toUTF8：中文 Windows 上 cmd/PowerShell 输出的是 GBK 字节，直接当 UTF-8
+	// 用会变成乱码（终端显示与模型上下文同时被毁）
+	stdout := normalizeCRLF(toUTF8(cmd.Stdout.(*syncBuffer).String()))
+	stderr := normalizeCRLF(toUTF8(cmd.Stderr.(*syncBuffer).String()))
 	returnCode := 0
 	if waitErr != nil {
 		if ee, ok := waitErr.(*exec.ExitError); ok {

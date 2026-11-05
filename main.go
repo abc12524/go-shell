@@ -18,6 +18,7 @@ import (
 	"go-shell/internal/chat"
 	"go-shell/internal/client"
 	"go-shell/internal/config"
+	"go-shell/internal/console"
 	"go-shell/internal/events"
 	"go-shell/internal/server"
 )
@@ -52,6 +53,11 @@ func pullConfigFlag(args []string) []string {
 }
 
 func main() {
+	// Windows 控制台默认按 GBK(936) 解释字节流，而本程序全程输出 UTF-8：
+	// 先把代码页切到 65001 并打开 ANSI 转义，否则中文与彩色全是乱码
+	restoreConsole := console.Init()
+	defer restoreConsole()
+
 	args := pullConfigFlag(os.Args[1:])
 	config.SetExampleConfig(exampleConfig)
 	config.Load()
