@@ -90,8 +90,14 @@ var (
 	InterjectGrace int
 
 	// ===== skill 运行时 =====
-	PythonBin  string // 执行 skill/*.py 用的解释器（默认 python3）
-	PythonPath string // 冒号分隔的目录，前置到 skill 子进程的 PATH（默认空=不修改）
+	// PythonBin 执行 skill/*.py 用的解释器（默认 python3）。
+	// 值含目录（如 /root/.venv/bin/python3）时，该目录自动前置到 skill 子进程的
+	// PATH——venv 里 pip 装的 CLI 工具对 skill 直接可见，无需再单独配路径。
+	PythonBin string
+
+	// ===== 目录（相对路径按 ProjectRoot 解析）=====
+	DataDir    string // 数据目录（SQLite 默认落这里；默认 <root>/data）
+	SkillDirCfg string // skill 脚本目录（默认 <root>/skill）
 
 	MaxAPIAttempts int
 )
@@ -185,6 +191,18 @@ func float(m map[string]string, key string, def float64) float64 {
 	return f
 }
 
+// resolveDir 目录类配置：相对路径按 ProjectRoot 解析为绝对路径，空值取默认。
+func resolveDir(m map[string]string, key, def string) string {
+	v := strings.TrimSpace(str(m, key, ""))
+	if v == "" {
+		v = def
+	}
+	if !filepath.IsAbs(v) {
+		v = filepath.Join(ProjectRoot, v)
+	}
+	return v
+}
+
 // InferProvider 按 base_url 推断服务商
 func InferProvider(baseURL string) string {
 	u := strings.ToLower(baseURL)
@@ -276,7 +294,8 @@ func Load() {
 	SkillHubToken = str(envMap, "SKILL_HUB_TOKEN", "")
 
 	DBOnline = boolean(envMap, "DB_ONLINE", true)
-	SQLitePath = str(envMap, "SQLITE_DB_PATH", filepath.Join(ProjectRoot, "data", "shell_tool.db"))
+	DataDir = resolveDir(envMap, "DATA_DIR", filepath.Join(ProjectRoot, "data"))
+	SQLitePath = str(envMap, "SQLITE_DB_PATH", filepath.Join(DataDir, "shell_tool.db"))
 
 	MySQLHost = str(envMap, "MYSQL_HOST", "")
 	MySQLPort = integer(envMap, "MYSQL_PORT", 3306)
@@ -295,7 +314,7 @@ func Load() {
 	}
 
 	PythonBin = str(envMap, "PYTHON_BIN", "python3")
-	PythonPath = str(envMap, "PYTHON_PATH", "")
+	SkillDirCfg = resolveDir(envMap, "SKILL_DIR", filepath.Join(ProjectRoot, "skill"))
 
 	MaxAPIAttempts = integer(envMap, "MAX_API_ATTEMPTS", 4)
 	if MaxAPIAttempts < 1 {

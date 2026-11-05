@@ -226,6 +226,10 @@ func mdStyleConfig() glamourAnsi.StyleConfig {
 	base.Strong.Color = &green
 	base.Emph.Color = &green
 	base.Code.Color = &green
+	// 正文（document 级）不带固定前景色：dark 样式默认把整篇染成 ANSI256 "252" 浅灰，
+	// 在浅色背景终端（Debian 下常见）整段正文都发灰难读。清掉后正文走终端默认
+	// 前景色，深浅背景都可读；标题/代码块等元素级颜色保留。
+	base.Document.StylePrimitive.Color = nil
 	return base
 }
 

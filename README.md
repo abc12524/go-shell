@@ -11,9 +11,9 @@ CLI 选项与 Python 版 `dp.py` 一一对应；`go-shell server` 启动 API 服
   `.env.example` 生成）；`server` 子命令同样可用 `-c`；`-k/-m` 写回 `-c` 指定的文件
 - LLM 双协议：DeepSeek Responses API / OpenAI 兼容 Chat Completions，流式输出
 - 工具：get_system_info / execute_system_command / skill / skill_hub（+可选 web_search）
-- skill 兼容：`skill/<名称>/skill.py` 仍为 Python 脚本，经内嵌 runner（`//go:embed`）子进程执行
-  （`PYTHON_BIN` 指定解释器，复用现有 venv 与既有技能仓库；runner 会在内存注入
-  `core.tools.envelope` 兼容层，部署目录无需携带 `core/`）
+- skill 兼容：`skill/<名称>/skill.py` 仍为 Python 脚本（目录可用 `SKILL_DIR` 改），经内嵌
+  runner（`//go:embed`）子进程执行（`PYTHON_BIN` 指定解释器，复用现有 venv 与既有技能仓库；
+  runner 会在内存注入 `core.tools.envelope` 兼容层，部署目录无需携带 `core/`）
 - 存储：本地 SQLite 唯一读写源 + 在线 MySQL 幂等同步（uid 去重 / synced 标记 / 基线）
 - OpenViking：question/step 记忆注入、profile 索引、session 抓取与 commit
 - HTTP API：`/chat`（同步）、`/chat/stream`（SSE）、`/interject`（中途插话）、`/health`；
@@ -29,8 +29,9 @@ SERVER_HOST=127.0.0.1   # 绑定 IP：127.0.0.1（仅本机）或 0.0.0.0（所�
 SERVER_PORT=8000        # 监听端口
 API_ACCESS_KEY=         # 访问验证码：至少 8 位，不限长度；空或太短 = 不校验（0.0.0.0 时务必设置）
 INTERJECT_GRACE=20      # 中途插话等待落地的最长秒数
-PYTHON_BIN=/root/.venv/bin/python3   # skill 脚本解释器
-PYTHON_PATH=                         # 可选：冒号分隔目录，前置到 skill 子进程 PATH
+PYTHON_BIN=/root/.venv/bin/python3   # skill 脚本解释器；带目录时该目录自动前置到子进程 PATH
+SKILL_DIR=                           # skill 脚本目录（默认 <二进制目录>/skill，相对路径按其解析）
+DATA_DIR=                            # 数据目录（默认 <二进制目录>/data，SQLite 落这里）
 ```
 
 ## 访问验证码

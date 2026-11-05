@@ -41,7 +41,10 @@ var (
 
 func SkillDir() string {
 	if skillDir == "" {
-		skillDir = filepath.Join(config.ProjectRoot, "skill")
+		skillDir = config.SkillDirCfg // Load 已按 ProjectRoot 解析为绝对路径
+		if skillDir == "" {
+			skillDir = filepath.Join(config.ProjectRoot, "skill")
+		}
 	}
 	return skillDir
 }
@@ -235,17 +238,26 @@ func executeSkill(name string, arguments map[string]any) string {
 	}
 	defer cleanup()
 	argsJSON, _ := json.Marshal(arguments)
+	// runner 把 argv[1] 加进 sys.path 后按包路径导入模块。默认 skill 目录就叫
+	// skill/，模块路径 skill.<名>.skill；配置了自定义 SKILL_DIR 时以目录名作
+	// 包前缀（如 my_skills.<名>.skill），并把该目录的父目录加入 sys.path。
+	sysPathDir := config.ProjectRoot
 	module := "skill." + name + ".skill"
+	if sd := SkillDir(); sd != filepath.Join(config.ProjectRoot, "skill") {
+		module = filepath.Base(sd) + "." + name + ".skill"
+		sysPathDir = filepath.Dir(sd)
+	}
 	cmdArgs := []string{
 		runnerPath,
-		config.ProjectRoot, module, string(argsJSON),
+		sysPathDir, module, string(argsJSON),
 	}
 	cmd := exec.Command(config.PythonBin, cmdArgs...)
 	cmd.Dir = config.ProjectRoot
 	env := os.Environ()
-	if config.PythonPath != "" {
-		// PYTHON_PATH：把指定目录前置到子进程 PATH（skill 内再调 python/CLI 工具时可命中）
-		env = append(env, "PATH="+config.PythonPath+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// PYTHON_BIN 带目录（如 /root/.venv/bin/python3）时，把解释器所在目录前置到
+	// 子进程 PATH：skill 内再调 python / pip 装的 CLI 工具时可命中同一环境
+	if dir := filepath.Dir(config.PythonBin); dir != "." && dir != "" {
+		env = append(env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
