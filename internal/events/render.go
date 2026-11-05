@@ -1036,17 +1036,22 @@ func metaLine(items [][2]string) string {
 	return line
 }
 
-// payloadContentWidth 内容不被压缩所需的渲染宽度，只按表格计算：
-// 正文本来就要按宽度折行，拿它当依据会让每个面板都拉满终端。无表格返回 0。
+// payloadContentWidth 内容不被压缩所需的渲染宽度，取三者的较大值：
+// 表格自然宽、纯文本最长行宽。JSON 不算——它会被 jsonView 重新格式化折行，
+// 单行几千字符没有参考意义，否则每块 JSON 面板都会拉满终端。
 func payloadContentWidth(text string) int {
 	text = strings.TrimSpace(text)
-	if text == "" || !strings.Contains(text, "|") {
+	if text == "" {
 		return 0
 	}
 	best := 0
 	consider := func(s string) {
-		if s == "" || !strings.Contains(s, "|") || !mdTableRowRe.MatchString(s) {
+		s = strings.TrimSpace(s)
+		if s == "" || looksLikeJSON(s) {
 			return
+		}
+		if w := maxLineWidth(s); w > best {
+			best = w
 		}
 		for _, seg := range splitMarkdownTables(s) {
 			if seg.table == nil {
@@ -1075,6 +1080,27 @@ func payloadContentWidth(text string) int {
 		}
 	}
 	return best
+}
+
+// looksLikeJSON 判断一段文本是否是 JSON 对象/数组：这类内容会交给 jsonView
+// 重新格式化折行，原始单行长度不代表渲染宽度。
+func looksLikeJSON(s string) bool {
+	if s == "" || (s[0] != '{' && s[0] != '[') {
+		return false
+	}
+	var v any
+	return json.Unmarshal([]byte(s), &v) == nil
+}
+
+// maxLineWidth 最长一行的显示宽度
+func maxLineWidth(s string) int {
+	w := 0
+	for _, ln := range strings.Split(s, "\n") {
+		if d := dw(ln); d > w {
+			w = d
+		}
+	}
+	return w
 }
 
 func payloadParts(text string, maxLines, charLimit, width int) []string {
