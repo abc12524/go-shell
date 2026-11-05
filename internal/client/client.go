@@ -116,7 +116,7 @@ func httpError(tgt config.RemoteTarget, resp *http.Response) error {
 	case resp.StatusCode == http.StatusUnauthorized && payload.Code == "access_code_required":
 		return fmt.Errorf("远程 %s 要求访问验证码：在配置里给该主机配上访问码（REMOTE_HOSTS=别名:端口:访问码），或设 REMOTE_KEY=%s", tgt.Label(), "<对端 API_ACCESS_KEY>")
 	case resp.StatusCode == http.StatusUnauthorized:
-		return fmt.Errorf("远程 %s 拒绝了访问码（%s）：确认与对端 .env 的 API_ACCESS_KEY 一致", tgt.Label(), msg)
+		return fmt.Errorf("远程 %s 拒绝了访问码（%s）：确认与对端配置文件里的 API_ACCESS_KEY 一致", tgt.Label(), msg)
 	case resp.StatusCode == http.StatusNotFound:
 		return fmt.Errorf("远程 %s 没有 /chat/stream（%s）：对端可能是旧版本，升级后再连", tgt.Label(), msg)
 	}
