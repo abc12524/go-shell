@@ -82,7 +82,7 @@ var (
 	ServerPort int
 
 	// AccessKey 访问 API 服务的全局验证码：至少 8 位，长度没有上限。
-	// 配了就强制校验（请求头 X-Access-Key / Authorization: Bearer / ?key= / body.key），
+	// 配了就强制校验（只认请求头 Authorization: Bearer <code>，不用 query / 自定义头），
 	// 空或短于 8 位 = 不校验（仅本机/内网自用），启动时打印告警。
 	AccessKey string
 

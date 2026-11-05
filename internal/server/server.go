@@ -7,7 +7,7 @@
 //   GET  /health        健康检查（不受访问验证码限制）
 //
 // 访问验证码：.env 的 API_ACCESS_KEY（至少 8 位）。配了则除 /health 外都要带对，
-// 支持请求头 X-Access-Key / Authorization: Bearer <code> / ?key=<code>。
+// 只认请求头 Authorization: Bearer <code>（不用 query，验证码不该出现在地址栏/日志里）。
 // 启动：go-shell server；监听地址取 .env 的 SERVER_HOST（127.0.0.1 / 0.0.0.0）与 SERVER_PORT。
 package server
 
@@ -291,17 +291,17 @@ streamLoop:
 	flusher.Flush()
 }
 
-// requestKey 取客户端带来的访问验证码：请求头 X-Access-Key > Authorization: Bearer > ?key=
+// requestKey 取客户端带来的访问验证码：只认 Authorization: Bearer <code>。
+//
+// 不接受 ?key= —— query 会进服务端访问日志、浏览器历史、Referer 和代理记录，
+// 验证码不该出现在这些地方。也不再用自定义头，标准 Bearer 一种就够。
 func requestKey(r *http.Request) string {
-	if v := strings.TrimSpace(r.Header.Get("X-Access-Key")); v != "" {
-		return v
+	const prefix = "bearer "
+	v := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(v) <= len(prefix) || !strings.EqualFold(v[:len(prefix)], prefix) {
+		return ""
 	}
-	if v := strings.TrimSpace(r.Header.Get("Authorization")); v != "" {
-		if lower := strings.ToLower(v); strings.HasPrefix(lower, "bearer ") {
-			return strings.TrimSpace(v[len("Bearer "):])
-		}
-	}
-	return strings.TrimSpace(r.URL.Query().Get("key"))
+	return strings.TrimSpace(v[len(prefix):])
 }
 
 // withAccess 全局限流门：配了 API_ACCESS_KEY（至少 8 位）就必须带对，
@@ -316,7 +316,7 @@ func withAccess(next http.HandlerFunc) http.HandlerFunc {
 		if given == "" {
 			writeJSON(w, 401, map[string]any{
 				"status": "error", "code": "access_code_required",
-				"error": "缺少访问验证码（请求头 X-Access-Key）",
+				"error": "缺少访问验证码（请求头 Authorization: Bearer <code>）",
 			})
 			return
 		}
@@ -408,7 +408,7 @@ func Run() error {
 	fmt.Printf("shell-tool API (go) 监听 http://%s  （SERVER_HOST=%s SERVER_PORT=%d）\n",
 		addr, config.ServerHost, config.ServerPort)
 	if config.AccessKeyEnabled() {
-		fmt.Printf("访问验证码：已开启（至少 %d 位；请求头 X-Access-Key / Authorization: Bearer / ?key=，/health 除外）\n",
+		fmt.Printf("访问验证码：已开启（至少 %d 位；请求头 Authorization: Bearer <code>，/health 除外）\n",
 			config.AccessKeyMinLen)
 	} else if config.AccessKeyTooShort() {
 		fmt.Printf("访问验证码：已忽略（API_ACCESS_KEY 只有 %d 位，至少要 %d 位才生效；当前 API 不校验）\n",

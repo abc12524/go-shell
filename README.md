@@ -37,13 +37,16 @@ PYTHON_PATH=                         # 可选：冒号分隔目录，前置到 s
 
 `API_ACCESS_KEY` 是**整个 API 服务**的验证码，不只是插话用的：长度**至少 8 位**（够长更好，
 没有上限）时生效，除 `/health` 外所有接口都要带对，否则回
-`401 access_code_required / access_code_invalid`。三种带法等价，客户端任选：
+`401 access_code_required / access_code_invalid`。
+
+只认标准请求头一种带法：
 
 ```bash
--H 'X-Access-Key: 1a2b3c4d'
 -H 'Authorization: Bearer 1a2b3c4d'
-'http://127.0.0.1:8000/chat?key=1a2b3c4d'
 ```
+
+**不提供 `?key=` 这种地址栏带法**，也不认自定义头：验证码一旦进 query，就会跟着访问日志、
+浏览器历史、`Referer` 和中间代理一路留痕。客户端存好码，发请求时放进 Authorization 头即可。
 
 留空或短于 8 位 = 不校验（本机/内网自用）；这时启动日志会明说「未设置」或「已忽略（只有 N 位）」。
 `SERVER_HOST=0.0.0.0` 暴露到局域网时务必设置。
@@ -70,15 +73,15 @@ cp .env.example .env   # 首次：填 API Key 等
 
 ## HTTP API
 
-设置了 `API_ACCESS_KEY` 时，除 `/health` 外都要带 `X-Access-Key`（下略）。
+设置了 `API_ACCESS_KEY` 时，除 `/health` 外都要带 `Authorization: Bearer <code>`（下略）。
 
 ```bash
 curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/chat \
-  -H 'Content-Type: application/json' -H 'X-Access-Key: 1a2b3c4d' \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer 1a2b3c4d' \
   -d '{"question":"查看磁盘占用","new":false}'
 curl -N -X POST http://127.0.0.1:8000/chat/stream \
-  -H 'Content-Type: application/json' -H 'X-Access-Key: 1a2b3c4d' \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer 1a2b3c4d' \
   -d '{"question":"你好"}'
 ```
 
@@ -96,7 +99,7 @@ usage/question/db/session/memory/tool_round/continuing/warning/search/log/turn/i
 
 ```bash
 curl -X POST http://127.0.0.1:8000/interject \
-  -H 'Content-Type: application/json' -H 'X-Access-Key: 1a2b3c4d' \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer 1a2b3c4d' \
   -d '{"text":"先别删，改成只读检查"}'
 ```
 
