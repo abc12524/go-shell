@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -80,9 +81,9 @@ var (
 	ServerHost string // 127.0.0.1 或 0.0.0.0
 	ServerPort int
 
-	// AccessKey 访问 API 服务的全局验证码：必须正好 8 位。
+	// AccessKey 访问 API 服务的全局验证码：至少 8 位，长度没有上限。
 	// 配了就强制校验（请求头 X-Access-Key / Authorization: Bearer / ?key= / body.key），
-	// 空或长度不符 = 不校验（仅本机/内网自用），启动时打印告警。
+	// 空或短于 8 位 = 不校验（仅本机/内网自用），启动时打印告警。
 	AccessKey string
 
 	// InterjectGrace 中途插话等待"递进上下文"的最长秒数（超时回 timeout，客户端自己重发）
@@ -286,7 +287,7 @@ func Load() {
 	ServerHost = str(envMap, "SERVER_HOST", "127.0.0.1")
 	ServerPort = integer(envMap, "SERVER_PORT", 8000)
 
-	// 访问口令：API 服务的全局验证码，必须正好 8 位（长度不对等于没配，避免半开状态）
+	// 访问口令：API 服务的全局验证码，至少 8 位（太短等于没配，避免弱口令半开）
 	AccessKey = strings.TrimSpace(str(envMap, "API_ACCESS_KEY", ""))
 	InterjectGrace = integer(envMap, "INTERJECT_GRACE", 20)
 	if InterjectGrace < 1 {
@@ -307,11 +308,15 @@ func MySQLConfigured() bool {
 	return MySQLHost != "" && MySQLUser != "" && MySQLDB != ""
 }
 
-// AccessKeyLen 访问 API 服务的验证码长度（固定 8 位）
-const AccessKeyLen = 8
+// AccessKeyMinLen 访问验证码的最低长度（按字符数）。短于此值视为未配置，
+// 避免「配了个 3 位的」被当成开着——那比不配还危险。
+const AccessKeyMinLen = 8
 
-// AccessKeyEnabled 是否启用了 API 访问校验：只认 8 位的 API_ACCESS_KEY
-func AccessKeyEnabled() bool { return len(AccessKey) == AccessKeyLen }
+// AccessKeyEnabled 是否启用了 API 访问校验：API_ACCESS_KEY 至少 AccessKeyMinLen 位。
+func AccessKeyEnabled() bool { return utf8.RuneCountInString(AccessKey) >= AccessKeyMinLen }
+
+// AccessKeyTooShort 配了但长度不够（启动日志据此明确提示，而不是含糊地当成「没配」）。
+func AccessKeyTooShort() bool { return AccessKey != "" && !AccessKeyEnabled() }
 
 // CheckAccessKey 校验客户端带来的验证码（常数时间比对，防时序侧信道）。
 // 未配置时返回 true（不校验）；配了就必须一致。

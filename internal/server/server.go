@@ -6,7 +6,7 @@
 //   GET  /interject/status 当前轮次与等待上限
 //   GET  /health        健康检查（不受访问验证码限制）
 //
-// 访问验证码：.env 的 API_ACCESS_KEY（8 位）。配了则除 /health 外都要带对，
+// 访问验证码：.env 的 API_ACCESS_KEY（至少 8 位）。配了则除 /health 外都要带对，
 // 支持请求头 X-Access-Key / Authorization: Bearer <code> / ?key=<code>。
 // 启动：go-shell server；监听地址取 .env 的 SERVER_HOST（127.0.0.1 / 0.0.0.0）与 SERVER_PORT。
 package server
@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go-shell/internal/chat"
 	"go-shell/internal/config"
@@ -303,8 +304,8 @@ func requestKey(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("key"))
 }
 
-// withAccess 全局限流门：配了 API_ACCESS_KEY（8 位）就必须带对，
-// 否则一律 401。没配则放行（仅本机/内网自用，启动日志会告警）。
+// withAccess 全局限流门：配了 API_ACCESS_KEY（至少 8 位）就必须带对，
+// 否则一律 401。没配（或太短被忽略）则放行（仅本机/内网自用，启动日志会告警）。
 func withAccess(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !config.AccessKeyEnabled() {
@@ -407,11 +408,14 @@ func Run() error {
 	fmt.Printf("shell-tool API (go) 监听 http://%s  （SERVER_HOST=%s SERVER_PORT=%d）\n",
 		addr, config.ServerHost, config.ServerPort)
 	if config.AccessKeyEnabled() {
-		fmt.Printf("访问验证码：已开启（%d 位；请求头 X-Access-Key / Authorization: Bearer / ?key=，/health 除外）\n",
-			config.AccessKeyLen)
+		fmt.Printf("访问验证码：已开启（至少 %d 位；请求头 X-Access-Key / Authorization: Bearer / ?key=，/health 除外）\n",
+			config.AccessKeyMinLen)
+	} else if config.AccessKeyTooShort() {
+		fmt.Printf("访问验证码：已忽略（API_ACCESS_KEY 只有 %d 位，至少要 %d 位才生效；当前 API 不校验）\n",
+			utf8.RuneCountInString(config.AccessKey), config.AccessKeyMinLen)
 	} else {
-		fmt.Printf("访问验证码：未设置（API 不校验，能连上端口即可用；在 .env 设 API_ACCESS_KEY=%s 开启）\n",
-			strings.Repeat("x", config.AccessKeyLen))
+		fmt.Printf("访问验证码：未设置（API 不校验，能连上端口即可用；在 .env 设 API_ACCESS_KEY=至少 %d 位的随机串开启）\n",
+			config.AccessKeyMinLen)
 	}
 	fmt.Printf("中途插话：POST /interject（等待上限 %ds）\n", config.InterjectGrace)
 	srv := &http.Server{

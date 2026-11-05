@@ -18,7 +18,7 @@ CLI 选项与 Python 版 `dp.py` 一一对应；`go-shell server` 启动 API 服
 - OpenViking：question/step 记忆注入、profile 索引、session 抓取与 commit
 - HTTP API：`/chat`（同步）、`/chat/stream`（SSE）、`/interject`（中途插话）、`/health`；
   事件协议与 Python 版一致
-- 访问验证码：`.env` 的 `API_ACCESS_KEY`（8 位）。配了则除 `/health` 外都要带对，否则 401
+- 访问验证码：`.env` 的 `API_ACCESS_KEY`（至少 8 位，不限长度）。配了则除 `/health` 外都要带对，否则 401
 - 中途插话：一轮还在干活时追说的话，等它走到工具边界再进上下文（不杀进程、不丢中途工作）
 - 计费：DeepSeek/OpenCode Go 峰谷单价、费用与余额查询
 
@@ -27,7 +27,7 @@ CLI 选项与 Python 版 `dp.py` 一一对应；`go-shell server` 启动 API 服
 ```bash
 SERVER_HOST=127.0.0.1   # 绑定 IP：127.0.0.1（仅本机）或 0.0.0.0（所有网卡）
 SERVER_PORT=8000        # 监听端口
-API_ACCESS_KEY=         # 访问验证码：8 位；空 = 不校验（0.0.0.0 时务必设置）
+API_ACCESS_KEY=         # 访问验证码：至少 8 位，不限长度；空或太短 = 不校验（0.0.0.0 时务必设置）
 INTERJECT_GRACE=20      # 中途插话等待落地的最长秒数
 PYTHON_BIN=/root/.venv/bin/python3   # skill 脚本解释器
 PYTHON_PATH=                         # 可选：冒号分隔目录，前置到 skill 子进程 PATH
@@ -35,9 +35,9 @@ PYTHON_PATH=                         # 可选：冒号分隔目录，前置到 s
 
 ## 访问验证码
 
-`API_ACCESS_KEY` 是**整个 API 服务**的验证码，不只是插话用的：有值且正好 8 位时，
-除 `/health` 外所有接口都要带对，否则回 `401 access_code_required / access_code_invalid`。
-三种带法等价，客户端任选：
+`API_ACCESS_KEY` 是**整个 API 服务**的验证码，不只是插话用的：长度**至少 8 位**（够长更好，
+没有上限）时生效，除 `/health` 外所有接口都要带对，否则回
+`401 access_code_required / access_code_invalid`。三种带法等价，客户端任选：
 
 ```bash
 -H 'X-Access-Key: 1a2b3c4d'
@@ -45,7 +45,8 @@ PYTHON_PATH=                         # 可选：冒号分隔目录，前置到 s
 'http://127.0.0.1:8000/chat?key=1a2b3c4d'
 ```
 
-留空或长度不是 8 位 = 不校验（本机/内网自用）。`SERVER_HOST=0.0.0.0` 暴露到局域网时务必设置。
+留空或短于 8 位 = 不校验（本机/内网自用）；这时启动日志会明说「未设置」或「已忽略（只有 N 位）」。
+`SERVER_HOST=0.0.0.0` 暴露到局域网时务必设置。
 
 ## 构建（nuc5，Debian 13 + Go 1.24）
 
