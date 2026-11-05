@@ -187,7 +187,8 @@ func ResolveRemote(name string) (RemoteTarget, error) {
 		if t.Key == "" {
 			t.Key = RemoteKey
 		}
-		t.Alias = name
+		// 别名只留地址：`-h host:port:访问码` 这种写法里带访问码，原样当别名会打到终端
+		t.Alias = t.Host
 		return t, nil
 	}
 	if aliases := RemoteAliases(); len(aliases) > 0 {

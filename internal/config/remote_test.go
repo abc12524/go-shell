@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseRemoteHosts(t *testing.T) {
 	raw := "nuc5=192.168.30.181:8018:1a2b3c4d, aml=http://192.168.30.131:8018 ," +
@@ -70,6 +73,17 @@ func TestResolveRemote(t *testing.T) {
 	tgt, err := ResolveRemote("192.168.30.9:7000")
 	if err != nil || tgt.Host != "192.168.30.9" || tgt.Port != 7000 || tgt.Key != "defkey" {
 		t.Fatalf("裸地址解析错误：%+v %v", tgt, err)
+	}
+	// 带访问码的裸地址：提示语里不能把访问码打出来
+	tgt, err = ResolveRemote("192.168.30.9:7000:secret123")
+	if err != nil {
+		t.Fatalf("带访问码的裸地址解析失败：%v", err)
+	}
+	if tgt.Key != "secret123" {
+		t.Fatalf("访问码没解析出来：%+v", tgt)
+	}
+	if strings.Contains(tgt.Label(), "secret123") {
+		t.Fatalf("提示语不应包含访问码：%s", tgt.Label())
 	}
 
 	// 未知别名要报错并列出可用别名
