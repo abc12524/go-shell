@@ -5,6 +5,7 @@
 package config
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,10 +80,12 @@ var (
 	ServerHost string // 127.0.0.1 或 0.0.0.0
 	ServerPort int
 
-	// ===== 中途插话 =====
-	// InterjectKey 客户端验证串：必须正好 8 位才算开启，空或长度不符 = 功能关闭。
-	InterjectKey string
-	// InterjectGrace /interject 等待"递进上下文"的最长秒数（超时回 timeout，客户端自己重发）
+	// AccessKey 访问 API 服务的全局验证码：必须正好 8 位。
+	// 配了就强制校验（请求头 X-Access-Key / Authorization: Bearer / ?key= / body.key），
+	// 空或长度不符 = 不校验（仅本机/内网自用），启动时打印告警。
+	AccessKey string
+
+	// InterjectGrace 中途插话等待"递进上下文"的最长秒数（超时回 timeout，客户端自己重发）
 	InterjectGrace int
 
 	// ===== skill 运行时 =====
@@ -283,8 +286,8 @@ func Load() {
 	ServerHost = str(envMap, "SERVER_HOST", "127.0.0.1")
 	ServerPort = integer(envMap, "SERVER_PORT", 8000)
 
-	// 插话开关只看 INTERJECT_KEY 是否 8 位（长度不对等于没配，避免半开状态）
-	InterjectKey = strings.TrimSpace(str(envMap, "INTERJECT_KEY", ""))
+	// 访问口令：API 服务的全局验证码，必须正好 8 位（长度不对等于没配，避免半开状态）
+	AccessKey = strings.TrimSpace(str(envMap, "API_ACCESS_KEY", ""))
 	InterjectGrace = integer(envMap, "INTERJECT_GRACE", 20)
 	if InterjectGrace < 1 {
 		InterjectGrace = 1
@@ -302,6 +305,21 @@ func Load() {
 // MySQLConfigured 是否已配置 MySQL（host/user/database 任一为空视为未配置）
 func MySQLConfigured() bool {
 	return MySQLHost != "" && MySQLUser != "" && MySQLDB != ""
+}
+
+// AccessKeyLen 访问 API 服务的验证码长度（固定 8 位）
+const AccessKeyLen = 8
+
+// AccessKeyEnabled 是否启用了 API 访问校验：只认 8 位的 API_ACCESS_KEY
+func AccessKeyEnabled() bool { return len(AccessKey) == AccessKeyLen }
+
+// CheckAccessKey 校验客户端带来的验证码（常数时间比对，防时序侧信道）。
+// 未配置时返回 true（不校验）；配了就必须一致。
+func CheckAccessKey(given string) bool {
+	if !AccessKeyEnabled() {
+		return true
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(given)), []byte(AccessKey)) == 1
 }
 
 // UpdateEnv 把配置写回 .env（已有则替换该行，否则追加），并同步内存配置。

@@ -62,9 +62,9 @@ func ToolRound(s Sink, index, local, search int) {
 	emit(s, "tool_round", map[string]any{"index": index, "local": local, "search": search})
 }
 
-// Turn 本轮登记完成：id 是中途插话的目标标识，interject 表示服务端是否开启了插话
-func Turn(s Sink, id string, interject bool) {
-	emit(s, "turn", map[string]any{"id": id, "interject": interject})
+// Turn 本轮登记完成：id 是中途插话的目标标识（/interject 可用它指定投给哪一轮）
+func Turn(s Sink, id string) {
+	emit(s, "turn", map[string]any{"id": id})
 }
 
 // Interject 一条插话已经写进上下文（客户端据此把这句并入本轮，不再另起一轮）

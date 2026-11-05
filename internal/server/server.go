@@ -2,10 +2,12 @@
 //
 //   POST /chat          同步对话
 //   POST /chat/stream   SSE 流式对话
-//   POST /interject     中途插话（需 X-Interject-Key，见 .env 的 INTERJECT_KEY）
-//   GET  /interject/status 插话开关与当前轮次
-//   GET  /health        健康检查
+//   POST /interject     中途插话（一句话递进正在跑的那一轮）
+//   GET  /interject/status 当前轮次与等待上限
+//   GET  /health        健康检查（不受访问验证码限制）
 //
+// 访问验证码：.env 的 API_ACCESS_KEY（8 位）。配了则除 /health 外都要带对，
+// 支持请求头 X-Access-Key / Authorization: Bearer <code> / ?key=<code>。
 // 启动：go-shell server；监听地址取 .env 的 SERVER_HOST（127.0.0.1 / 0.0.0.0）与 SERVER_PORT。
 package server
 
@@ -229,11 +231,7 @@ func handlerStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Connection", "keep-alive")
 
-	// start 带上插话能力：客户端据此决定"流式期间想让模型改道时"走 /interject 还是重发
-	fmt.Fprint(w, sseEvent("start", map[string]any{
-		"interject": interject.Enabled(),
-		"grace":     config.InterjectGrace,
-	}))
+	fmt.Fprint(w, sseEvent("start", nil))
 	flusher.Flush()
 
 	// 非对话动作：一次性输出文本为 log 事件后 done
@@ -292,21 +290,49 @@ streamLoop:
 	flusher.Flush()
 }
 
-func handlerHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, map[string]any{"status": "ok", "service": "shell-tool-api"})
-}
-
-// requestKey 取客户端验证串：优先请求头 X-Interject-Key，其次 body 的 key 字段
-func requestKey(r *http.Request, bodyKey string) string {
-	if v := strings.TrimSpace(r.Header.Get("X-Interject-Key")); v != "" {
+// requestKey 取客户端带来的访问验证码：请求头 X-Access-Key > Authorization: Bearer > ?key=
+func requestKey(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-Access-Key")); v != "" {
 		return v
 	}
-	return strings.TrimSpace(bodyKey)
+	if v := strings.TrimSpace(r.Header.Get("Authorization")); v != "" {
+		if lower := strings.ToLower(v); strings.HasPrefix(lower, "bearer ") {
+			return strings.TrimSpace(v[len("Bearer "):])
+		}
+	}
+	return strings.TrimSpace(r.URL.Query().Get("key"))
+}
+
+// withAccess 全局限流门：配了 API_ACCESS_KEY（8 位）就必须带对，
+// 否则一律 401。没配则放行（仅本机/内网自用，启动日志会告警）。
+func withAccess(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !config.AccessKeyEnabled() {
+			next(w, r)
+			return
+		}
+		given := requestKey(r)
+		if given == "" {
+			writeJSON(w, 401, map[string]any{
+				"status": "error", "code": "access_code_required",
+				"error": "缺少访问验证码（请求头 X-Access-Key）",
+			})
+			return
+		}
+		if !config.CheckAccessKey(given) {
+			writeJSON(w, 401, map[string]any{
+				"status": "error", "code": "access_code_invalid",
+				"error": "访问验证码不正确",
+			})
+			return
+		}
+		next(w, r)
+	}
 }
 
 // handlerInterject POST /interject：把一句话递进正在跑的那一轮
 //
-// 只有带对 8 位验证串（.env 的 INTERJECT_KEY）的客户端才能用；递进去的时机由引擎决定
+// 访问校验由 withAccess 统一做（.env 的 API_ACCESS_KEY）。递进去的时机由引擎决定
 // （工具边界），本接口最多等 INTERJECT_GRACE 秒拿结果：
 //
 //	{"status":"injected"} 已写进上下文，客户端不必再发新消息
@@ -321,7 +347,6 @@ func handlerInterject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ID     string  `json:"id"`
 		Text   string  `json:"text"`
-		Key    string  `json:"key"`
 		TurnID string  `json:"turn_id"`
 		Wait   float64 `json:"wait"`
 	}
@@ -331,22 +356,6 @@ func handlerInterject(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(body.Text) == "" {
 		badRequest(w, "text 不能为空")
-		return
-	}
-
-	// 开关与鉴权：只看 INTERJECT_KEY 是否 8 位、客户端是否带对
-	if !interject.Enabled() {
-		writeJSON(w, 403, map[string]any{
-			"status": "error", "code": "interject_disabled",
-			"error": fmt.Sprintf("服务端未开启中途插话（.env 的 INTERJECT_KEY 需为 %d 位）", interject.KeyLen),
-		})
-		return
-	}
-	if !interject.CheckKey(requestKey(r, body.Key)) {
-		writeJSON(w, 403, map[string]any{
-			"status": "error", "code": "interject_key_invalid",
-			"error": "验证串不正确，客户端无权插话",
-		})
 		return
 	}
 
@@ -372,21 +381,23 @@ func handlerInterject(w http.ResponseWriter, r *http.Request) {
 // handlerInterjectStatus GET /interject/status：客户端用它决定要不要走插话这条路
 func handlerInterjectStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{
-		"enabled": interject.Enabled(),
-		"key_len": interject.KeyLen,
-		"grace":   config.InterjectGrace,
-		"turn_id": interject.Active(),
+		"access_required": config.AccessKeyEnabled(),
+		"grace":           config.InterjectGrace,
+		"turn_id":         interject.Active(),
 	})
+}
+func handlerHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, map[string]any{"status": "ok", "service": "shell-tool-api"})
 }
 
 // Run 启动 HTTP 服务
 func Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handlerHealth)
-	mux.HandleFunc("/chat", handlerChat)
-	mux.HandleFunc("/chat/stream", handlerStream)
-	mux.HandleFunc("/interject", handlerInterject)
-	mux.HandleFunc("/interject/status", handlerInterjectStatus)
+	mux.HandleFunc("/chat", withAccess(handlerChat))
+	mux.HandleFunc("/chat/stream", withAccess(handlerStream))
+	mux.HandleFunc("/interject", withAccess(handlerInterject))
+	mux.HandleFunc("/interject/status", withAccess(handlerInterjectStatus))
 
 	if err := chat.EnsureDB(events.NewTerminal()); err != nil {
 		return fmt.Errorf("数据库初始化失败：%v", err)
@@ -395,14 +406,14 @@ func Run() error {
 	addr := fmt.Sprintf("%s:%d", config.ServerHost, config.ServerPort)
 	fmt.Printf("shell-tool API (go) 监听 http://%s  （SERVER_HOST=%s SERVER_PORT=%d）\n",
 		addr, config.ServerHost, config.ServerPort)
-	switch {
-	case interject.Enabled():
-		fmt.Printf("中途插话：已开启（POST /interject，需 X-Interject-Key；等待上限 %ds）\n", config.InterjectGrace)
-	case config.InterjectKey != "":
-		fmt.Printf("中途插话：已关闭（INTERJECT_KEY 长度不是 %d 位）\n", interject.KeyLen)
-	default:
-		fmt.Printf("中途插话：未配置（在 .env 里设 INTERJECT_KEY=%s 开启）\n", strings.Repeat("x", interject.KeyLen))
+	if config.AccessKeyEnabled() {
+		fmt.Printf("访问验证码：已开启（%d 位；请求头 X-Access-Key / Authorization: Bearer / ?key=，/health 除外）\n",
+			config.AccessKeyLen)
+	} else {
+		fmt.Printf("访问验证码：未设置（API 不校验，能连上端口即可用；在 .env 设 API_ACCESS_KEY=%s 开启）\n",
+			strings.Repeat("x", config.AccessKeyLen))
 	}
+	fmt.Printf("中途插话：POST /interject（等待上限 %ds）\n", config.InterjectGrace)
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: mux,

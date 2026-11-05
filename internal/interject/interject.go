@@ -2,7 +2,7 @@
 //
 // 一句话：用户在一轮还在干活时追说的话，先入队，等这一轮走到工具边界再递进上下文。
 //
-//	POST /interject {"text":"..."} + 请求头 X-Interject-Key（.env 的 INTERJECT_KEY，8 位）
+//	POST /interject {"text":"..."}（访问校验见 config.API_ACCESS_KEY 全局验证码）
 //	→ injected（已进上下文并落库）/ timeout（这一轮没走到工具边界）/ expired（轮次已结束）/ idle（没在跑）
 //
 // 与 Python 版的差别：go-shell 的引擎就在同一个进程里，不需要「父进程写子进程 stdin」
@@ -18,18 +18,12 @@ package interject
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"go-shell/internal/config"
 )
-
-// KeyLen 客户端验证串长度：INTERJECT_KEY 必须正好 8 位，空或长度不符视为功能关闭。
-const KeyLen = 8
 
 // 插话消息的包装标签（模型据此知道"这是中途追的话"，不必塞进 system prompt）
 const (
@@ -51,17 +45,6 @@ const note = "（上面是你在处理上一件事期间，用户又发来的一
 // Wrap 把插话包成一条能自解释的 user 消息。
 func Wrap(text string) string {
 	return OpenTag + "\n" + strings.TrimSpace(text) + "\n" + CloseTag + "\n" + note
-}
-
-// Enabled 插话功能是否开启：INTERJECT_KEY 必须正好 8 位。
-func Enabled() bool { return len(config.InterjectKey) == KeyLen }
-
-// CheckKey 校验客户端带来的验证串（常数时间比对，防时序侧信道）。
-func CheckKey(given string) bool {
-	if !Enabled() {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(given)), []byte(config.InterjectKey)) == 1
 }
 
 // Item 一条待落地的插话。

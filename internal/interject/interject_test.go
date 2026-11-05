@@ -5,49 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"go-shell/internal/config"
 )
 
-// withKey 临时设置验证串（config 是包级全局，测完复原）
-func withKey(t *testing.T, key string) {
-	t.Helper()
-	old := config.InterjectKey
-	config.InterjectKey = key
-	t.Cleanup(func() { config.InterjectKey = old })
-}
-
-func TestKeyGate(t *testing.T) {
-	cases := []struct {
-		name    string
-		key     string
-		given   string
-		enabled bool
-		ok      bool
-	}{
-		{"未配置", "", "", false, false},
-		{"长度不足", "1234567", "1234567", false, false},
-		{"长度超长", "123456789", "123456789", false, false},
-		{"8 位且相符", "1a2b3c4d", "1a2b3c4d", true, true},
-		{"8 位但末尾空白", "1a2b3c4d", " 1a2b3c4d ", true, true},
-		{"8 位但不符", "1a2b3c4d", "1a2b3c4e", true, false},
-		{"8 位但为空", "1a2b3c4d", "", true, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			withKey(t, c.key)
-			if got := Enabled(); got != c.enabled {
-				t.Fatalf("Enabled()=%v，期望 %v", got, c.enabled)
-			}
-			if got := CheckKey(c.given); got != c.ok {
-				t.Fatalf("CheckKey(%q)=%v，期望 %v", c.given, got, c.ok)
-			}
-		})
-	}
-}
-
 func TestPushWithoutActiveTurn(t *testing.T) {
-	withKey(t, "1a2b3c4d")
 	if Active() != "" {
 		t.Fatalf("期望没有活跃轮次，实际 %q", Active())
 	}
@@ -57,7 +17,6 @@ func TestPushWithoutActiveTurn(t *testing.T) {
 }
 
 func TestDrainThenAck(t *testing.T) {
-	withKey(t, "1a2b3c4d")
 	turn := Begin("s1")
 	defer turn.End()
 
@@ -84,7 +43,6 @@ func TestDrainThenAck(t *testing.T) {
 }
 
 func TestEndExpiresPending(t *testing.T) {
-	withKey(t, "1a2b3c4d")
 	turn := Begin("s1")
 	item, _ := Push("", "改个方向")
 	if item == nil {
@@ -103,7 +61,6 @@ func TestEndExpiresPending(t *testing.T) {
 }
 
 func TestWaitTimeoutKeepsItem(t *testing.T) {
-	withKey(t, "1a2b3c4d")
 	turn := Begin("s1")
 	defer turn.End()
 
@@ -121,7 +78,6 @@ func TestWaitTimeoutKeepsItem(t *testing.T) {
 }
 
 func TestPushToSpecificTurn(t *testing.T) {
-	withKey(t, "1a2b3c4d")
 	first := Begin("s1")
 	second := Begin("s2")
 	defer first.End()
@@ -144,7 +100,6 @@ func TestPushToSpecificTurn(t *testing.T) {
 }
 
 func TestPushRejectsEmptyText(t *testing.T) {
-	withKey(t, "1a2b3c4d")
 	turn := Begin("s1")
 	defer turn.End()
 	if it, _ := Push("", "   "); it != nil {

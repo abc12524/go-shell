@@ -356,7 +356,7 @@ func RunTurn(ctx context.Context, opts *Options, sink events.Sink) (string, erro
 	}
 	events.Session(sink, map[bool]string{true: "new", false: "resume"}[isNew], sessionID)
 	turn.SetSession(sessionID)
-	events.Turn(sink, turn.ID, interject.Enabled())
+	events.Turn(sink, turn.ID)
 
 	ovSessionID := ""
 	if config.OVCapture {

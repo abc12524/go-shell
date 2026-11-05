@@ -18,8 +18,8 @@ CLI 选项与 Python 版 `dp.py` 一一对应；`go-shell server` 启动 API 服
 - OpenViking：question/step 记忆注入、profile 索引、session 抓取与 commit
 - HTTP API：`/chat`（同步）、`/chat/stream`（SSE）、`/interject`（中途插话）、`/health`；
   事件协议与 Python 版一致
-- 中途插话：一轮还在干活时追说的话，等它走到工具边界再进上下文（不杀进程、不丢中途工作），
-  由 `.env` 的 `INTERJECT_KEY`（8 位验证串）决定开不开、谁能用
+- 访问验证码：`.env` 的 `API_ACCESS_KEY`（8 位）。配了则除 `/health` 外都要带对，否则 401
+- 中途插话：一轮还在干活时追说的话，等它走到工具边界再进上下文（不杀进程、不丢中途工作）
 - 计费：DeepSeek/OpenCode Go 峰谷单价、费用与余额查询
 
 ## 服务端配置（.env）
@@ -27,9 +27,25 @@ CLI 选项与 Python 版 `dp.py` 一一对应；`go-shell server` 启动 API 服
 ```bash
 SERVER_HOST=127.0.0.1   # 绑定 IP：127.0.0.1（仅本机）或 0.0.0.0（所有网卡）
 SERVER_PORT=8000        # 监听端口
+API_ACCESS_KEY=         # 访问验证码：8 位；空 = 不校验（0.0.0.0 时务必设置）
+INTERJECT_GRACE=20      # 中途插话等待落地的最长秒数
 PYTHON_BIN=/root/.venv/bin/python3   # skill 脚本解释器
 PYTHON_PATH=                         # 可选：冒号分隔目录，前置到 skill 子进程 PATH
 ```
+
+## 访问验证码
+
+`API_ACCESS_KEY` 是**整个 API 服务**的验证码，不只是插话用的：有值且正好 8 位时，
+除 `/health` 外所有接口都要带对，否则回 `401 access_code_required / access_code_invalid`。
+三种带法等价，客户端任选：
+
+```bash
+-H 'X-Access-Key: 1a2b3c4d'
+-H 'Authorization: Bearer 1a2b3c4d'
+'http://127.0.0.1:8000/chat?key=1a2b3c4d'
+```
+
+留空或长度不是 8 位 = 不校验（本机/内网自用）。`SERVER_HOST=0.0.0.0` 暴露到局域网时务必设置。
 
 ## 构建（nuc5，Debian 13 + Go 1.24）
 
@@ -53,19 +69,21 @@ cp .env.example .env   # 首次：填 API Key 等
 
 ## HTTP API
 
+设置了 `API_ACCESS_KEY` 时，除 `/health` 外都要带 `X-Access-Key`（下略）。
+
 ```bash
 curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/chat \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Access-Key: 1a2b3c4d' \
   -d '{"question":"查看磁盘占用","new":false}'
 curl -N -X POST http://127.0.0.1:8000/chat/stream \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Access-Key: 1a2b3c4d' \
   -d '{"question":"你好"}'
 ```
 
 `/chat/stream` SSE 事件：`start/done/error/content/reasoning/tool_call/tool_result/
 usage/question/db/session/memory/tool_round/continuing/warning/search/log/turn/interject`，
-字段与 Python 版一致；`: heartbeat` 为保活注释。`turn` 给出本轮 id 与插话开关，
+字段与 Python 版一致；`: heartbeat` 为保活注释。`turn` 给出本轮 id（插话可用它指定目标），
 `interject` 表示某句话已经插进本轮（`{id, text, turn_id}`）。
 
 ## 中途插话
@@ -76,13 +94,8 @@ usage/question/db/session/memory/tool_round/continuing/warning/search/log/turn/i
 包一层并照常落库（会话历史里就是用户说的）。
 
 ```bash
-# .env：验证串必须正好 8 位，空或长度不符 = 功能关闭
-INTERJECT_KEY=1a2b3c4d
-INTERJECT_GRACE=20      # 等待落地的最长秒数
-
 curl -X POST http://127.0.0.1:8000/interject \
-  -H 'Content-Type: application/json' \
-  -H 'X-Interject-Key: 1a2b3c4d' \
+  -H 'Content-Type: application/json' -H 'X-Access-Key: 1a2b3c4d' \
   -d '{"text":"先别删，改成只读检查"}'
 ```
 
@@ -93,9 +106,8 @@ curl -X POST http://127.0.0.1:8000/interject \
 | `{"status":"expired"}` | 这一轮已结束，没赶上 | 按新消息重发 |
 | `{"status":"idle"}`（409） | 当前没有正在跑的轮次 | 直接发新消息 |
 
-鉴权：只要 `INTERJECT_KEY` 是 8 位就开门，客户端必须带**同样的**值（请求头
-`X-Interject-Key`，或 body 的 `key`），否则 403。`GET /interject/status` 返回
-`{enabled, key_len, grace, turn_id}`，客户端可先问一句再决定走插话还是重发。
+`GET /interject/status` 返回 `{access_required, grace, turn_id}`，客户端可先问一句再决定
+走插话还是重发；`turn_id` 为空即当前没有在跑的轮次。
 
 落点为什么只能在**整批**工具结果之后：夹在两批并行 `function_call_output` 中间会留下
 没有 output 的孤立 `function_call`，Responses 与 Chat Completions 都 400，而且它已写进
