@@ -227,6 +227,63 @@ var (
 	glCache = map[int]*glamour.TermRenderer{}
 )
 
+// escapeTildesLine 把「单个 ~」转义成 \~，连续两个及以上的 ~ 原样保留。
+// goldmark 的删除线扩展认单个 ~ 作定界符：中文里 ~ 表示区间（74%~84%、
+// 4~9 km/h、13~16℃），两个相隔很远的 ~ 会被凑成一对，把中间整段变成
+// 删除线、连同 ~ 一起吃掉。行内代码里的 ~ 不动（转义会显出反斜杠）。
+func escapeTildesLine(s string) string {
+	var b strings.Builder
+	inCode := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '`' {
+			inCode = !inCode
+			b.WriteByte(c)
+			continue
+		}
+		if c != '~' || inCode {
+			b.WriteByte(c)
+			continue
+		}
+		j := i
+		for j < len(s) && s[j] == '~' {
+			j++
+		}
+		if j-i == 1 {
+			b.WriteString(`\~`)
+		} else {
+			b.WriteString(s[i:j]) // ~~删除线~~ 的定界符保持原样
+		}
+		i = j - 1
+	}
+	return b.String()
+}
+
+// escapeTildes 按行处理，围栏代码块（```）内部的 ~ 不转义，否则会印出反斜杠
+func escapeTildes(text string) string {
+	if !strings.Contains(text, "~") {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text) + 8)
+	inFence := false
+	for _, seg := range strings.SplitAfter(text, "\n") {
+		line := strings.TrimRight(seg, "\n")
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+			b.WriteString(seg)
+			continue
+		}
+		if inFence {
+			b.WriteString(seg)
+			continue
+		}
+		b.WriteString(escapeTildesLine(line))
+		b.WriteString(seg[len(line):])
+	}
+	return b.String()
+}
+
 // mdStyleConfig 基于 glamour 标准 dark/light 风格，着重文字统一改绿色：
 // 加粗（strong）、斜体（em）、行内代码（code）默认渲染偏红/不着色，按需求改为绿色。
 func mdStyleConfig() glamourAnsi.StyleConfig {
@@ -262,6 +319,7 @@ func preferDarkBackground() bool {
 // renderMarkdown 一次性渲染 Markdown（glamour，按宽度换行）
 func renderMarkdown(text string, width int) string {
 	text = flattenHeadings(text)
+	text = escapeTildes(text)
 	if !colorEnabled {
 		return text
 	}
@@ -634,7 +692,9 @@ var mdPatterns = []struct {
 	{regexp.MustCompile(`(?m)^\s*#{2,6}\s`), 2},
 	{regexp.MustCompile(`(?m)^\s*#\s`), 1},
 	{regexp.MustCompile(`(?m)\[[^\]\n]+\]\([^)\n]+\)`), 2},
-	{regexp.MustCompile(`(?m)\*\*[^*\n]+\*\*`), 1},
+	// 加粗是模型最常用的排版（「**一句话标题**」+ 正文），权重必须够：此前只给 1，
+	// 「纯加粗」「加粗+列表」都到不了阈值 3，被当成纯文本原样印出 ** 与 - 标记
+	{regexp.MustCompile(`(?m)\*\*[^*\n]+\*\*`), 3},
 	{regexp.MustCompile(`(?m)^\s*[-*+]\s+\S`), 1},
 	{regexp.MustCompile(`(?m)^\s*\d+\.\s+\S`), 1},
 	{regexp.MustCompile(`(?m)^\s*>\s+\S`), 1},
