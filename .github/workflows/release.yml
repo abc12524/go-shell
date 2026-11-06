@@ -1,0 +1,126 @@
+name: Release
+
+# 手动触发：一次编译 4 个平台，可选直接发布 Release
+#   1) Actions → Release → Run workflow
+#   2) 填版本号（可留空自动生成 vYYYY.MM.DD-<short-sha>）
+#   3) publish = true → 编完自动建 tag + GitHub Release 并上传全部产物
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 v1.2.0）；留空自动生成 vYYYY.MM.DD-<short-sha>'
+        required: false
+        default: ''
+      publish:
+        description: '编译完成后是否发布 Release'
+        type: choice
+        options: ['true', 'false']
+        default: 'true'
+
+permissions:
+  contents: write
+
+env:
+  CGO_ENABLED: '0' # modernc.org/sqlite 是纯 Go 实现，可全平台静态交叉编译
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, goarm: '',  asset: go-shell-linux-amd64 }
+          - { goos: linux,   goarch: arm64, goarm: '',  asset: go-shell-linux-arm64 }
+          - { goos: linux,   goarch: arm,   goarm: '7', asset: go-shell-linux-armv7 }
+          - { goos: windows, goarch: amd64, goarm: '',  asset: go-shell-windows-amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          set -euo pipefail
+          EXT=""
+          if [ "${GOOS}" = "windows" ]; then EXT=".exe"; fi
+          go build -trimpath -ldflags "-s -w" -buildvcs=false -o "dist/go-shell${EXT}" .
+          ls -lh "dist/go-shell${EXT}"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p pkg
+          cp README.md dist/
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            (cd dist && zip -9 -q "../pkg/${{ matrix.asset }}.zip" ./*)
+          else
+            tar -czf "pkg/${{ matrix.asset }}.tar.gz" -C dist .
+          fi
+          ls -lh pkg/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: pkg/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: publish
+    needs: build
+    if: inputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum ./* > checksums.txt
+          cat checksums.txt
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.version }}"
+          TAG="${TAG#v}"
+          if [ -z "$TAG" ]; then
+            TAG="$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"
+          fi
+          TAG="v${TAG}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "resolved tag: $TAG"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG 已存在，先删除后重建"
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+          gh release create "$TAG" artifacts/* \
+            --title "$TAG" \
+            --generate-notes \
+            --latest
+          echo "已发布 https://github.com/${{ github.repository }}/releases/tag/$TAG"

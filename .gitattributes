@@ -1,0 +1,5 @@
+# 统一为 LF：Windows 开发、Linux 部署、CI 三处行尾一致
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
