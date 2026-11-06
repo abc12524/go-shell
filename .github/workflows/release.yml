@@ -36,9 +36,9 @@ jobs:
           - { goos: linux,   goarch: arm,   goarm: '7', asset: go-shell-linux-armv7 }
           - { goos: windows, goarch: amd64, goarm: '',  asset: go-shell-windows-amd64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -67,7 +67,7 @@ jobs:
           fi
           ls -lh pkg/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: pkg/*
@@ -80,11 +80,11 @@ jobs:
     if: inputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
