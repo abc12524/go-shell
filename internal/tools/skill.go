@@ -254,6 +254,12 @@ func executeSkill(name string, arguments map[string]any) string {
 	// skill 里用相对路径找 data 时能命中；老部署 sysPathDir 仍是二进制目录，行为不变
 	cmd.Dir = sysPathDir
 	env := os.Environ()
+	// skill 子进程的 stdout/stderr 是管道，中文 Windows 上 Python 会退回 cp936(GBK)：
+	// 输出 emoji 直接 UnicodeEncodeError，subprocess(text=True) 解非 ASCII 也会崩。
+	// 强制 UTF-8 模式——PYTHONUTF8 还让 getpreferredencoding() 返回 utf-8，
+	// 连 skill 自己再起子进程的解码一并修正，不必每个 skill 各自兜编码。
+	env = setEnv(env, "PYTHONUTF8", "1")
+	env = setEnv(env, "PYTHONIOENCODING", "utf-8")
 	// PYTHON_BIN 带目录（如 /root/.venv/bin/python3）时，把解释器所在目录前置到
 	// 子进程 PATH：skill 内再调 python / pip 装的 CLI 工具时可命中同一环境
 	if dir := filepath.Dir(config.PythonBin); dir != "." && dir != "" {
@@ -318,4 +324,17 @@ func SkillTool(all bool, skillName string, arguments any, hasArgs bool) string {
 		"  - 查看某个 skill 用法：传 skill='名称'（不传 arguments）\n" +
 		"  - 执行某个 skill：传 skill='名称' 并传 arguments={参数}\n" +
 		"已注册 skill：" + orDefault(strings.Join(disclosed, ", "), "(空)")
+}
+
+// setEnv 覆盖式设置环境变量：同名只保留一份，避免重复键在子进程里行为不一致
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, prefix+value)
 }
