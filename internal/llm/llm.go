@@ -204,6 +204,33 @@ func headers(sessionID string) (map[string]string, error) {
 
 var errMessageRe = regexp.MustCompile(`"message"\s*:\s*"([^"]+)"`)
 
+// APIError 服务端返回非 200 的错误（带状态码）。
+// 上层据此区分「服务繁忙，稍后重试」与「配置 / 网络问题」，不必再猜错误文案。
+type APIError struct {
+	Status int
+	Msg    string
+}
+
+func (e *APIError) Error() string { return fmt.Sprintf("API %d: %s", e.Status, e.Msg) }
+
+// dialHint 针对常见的连接层失败补一句可操作的提示；认不出来就返回空串，不瞎猜。
+func dialHint(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "no such host"), strings.Contains(msg, "server misbehaving"),
+		strings.Contains(msg, "lookup ") && strings.Contains(msg, ":53"):
+		return "\n疑似 DNS 解析失败：检查本机 DNS 设置；Android/Termux 上纯 Go 二进制还需可读的 /etc/resolv.conf" +
+			"（可 proot -b $PREFIX/etc/resolv.conf:/etc/resolv.conf 运行）"
+	case strings.Contains(msg, "x509"), strings.Contains(msg, "certificate"):
+		return "\n疑似根证书缺失：Android/Termux 上设置 SSL_CERT_FILE=$PREFIX/etc/tls/cert.pem"
+	case strings.Contains(msg, "network is unreachable"), strings.Contains(msg, "no route to host"),
+		strings.Contains(msg, "i/o timeout"), strings.Contains(msg, "handshake timeout"),
+		strings.Contains(msg, "connection refused"):
+		return "\n检查网络连通性与代理设置（HTTP_PROXY / HTTPS_PROXY）"
+	}
+	return ""
+}
+
 // postStream 发起流式 POST（带瞬时错误重试与 stream_options 容错）
 func postStream(ctx context.Context, path string, hdrs map[string]string, payload map[string]any, sink events.Sink) (io.ReadCloser, error) {
 	url := apiURL(path)
@@ -223,7 +250,7 @@ func postStream(ctx context.Context, path string, hdrs map[string]string, payloa
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			return nil, fmt.Errorf("API 连接失败，请检查网络")
+			return nil, fmt.Errorf("API 连接失败：%v%s", err, dialHint(err))
 		}
 		if resp.StatusCode == 200 {
 			return resp.Body, nil
@@ -257,7 +284,7 @@ func postStream(ctx context.Context, path string, hdrs map[string]string, payloa
 		if msg == "" {
 			msg = fmt.Sprintf("HTTP %d", status)
 		}
-		return nil, fmt.Errorf("API %d: %s", status, msg)
+		return nil, &APIError{Status: status, Msg: msg}
 	}
 	return nil, fmt.Errorf("API 请求失败")
 }

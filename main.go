@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 	"go-shell/internal/config"
 	"go-shell/internal/console"
 	"go-shell/internal/events"
+	"go-shell/internal/llm"
 	"go-shell/internal/server"
 )
 
@@ -151,7 +153,11 @@ func main() {
 			os.Exit(130)
 		}
 		fmt.Fprintf(os.Stderr, "调用失败：%v\n", err)
-		fmt.Fprintln(os.Stderr, "若为服务繁忙（503/429），稍等片刻重试即可；也可在 .env 中切换 DEEPSEEK_BASE_URL / DEEPSEEK_MODEL 使用备用服务商。")
+		// 只有状态码类错误才值得「稍等重试」；DNS / 证书 / 网络不通再这么说会误导成密钥问题。
+		var apiErr *llm.APIError
+		if errors.As(err, &apiErr) && (apiErr.Status == 429 || apiErr.Status >= 500) {
+			fmt.Fprintln(os.Stderr, "若为服务繁忙（503/429），稍等片刻重试即可；也可在 .env 中切换 DEEPSEEK_BASE_URL / DEEPSEEK_MODEL 使用备用服务商。")
+		}
 		os.Exit(1)
 	}
 	_ = reply
