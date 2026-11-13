@@ -469,10 +469,19 @@ func StreamResponsesAPI(ctx context.Context, messages []map[string]any, sink eve
 				m := *fc
 				m["arguments"] = stringOf(m["arguments"]) + stringOf(ev["delta"])
 			}
-		case ctype == "response.reasoning_text.delta":
+		case ctype == "response.reasoning_text.delta" || ctype == "response.reasoning_summary_text.delta":
+			// reasoning_text：DeepSeek 官方 Responses API 的思维链正文；
+			// reasoning_summary_text：LiteLLM 等网关把思维链放在 reasoning.summary（摘要文本）里，
+			// 两者语义相同（模型的思考过程），统一累积并流式渲染。
 			if delta := stringOf(ev["delta"]); delta != "" {
 				result.Reasoning += delta
 				events.Emit(sink, map[string]any{"t": "reasoning", "content": delta})
+			}
+		case (ctype == "response.reasoning_text.done" || ctype == "response.reasoning_summary_text.done") && result.Reasoning == "":
+			// 兜底：个别网关不逐字发送 delta，只在 done 里给完整文本
+			if text := stringOf(ev["text"]); text != "" {
+				result.Reasoning = text
+				events.Emit(sink, map[string]any{"t": "reasoning", "content": text})
 			}
 		case ctype == "response.output_text.delta":
 			if delta := stringOf(ev["delta"]); delta != "" {
@@ -551,7 +560,12 @@ func StreamChatCompletions(ctx context.Context, messages []map[string]any, sink 
 		if delta == nil {
 			continue
 		}
-		if r := stringOf(delta["reasoning_content"]); r != "" {
+		// DeepSeek 返回 reasoning_content，部分网关（LiteLLM / vLLM / SGLang）返回 reasoning
+		r := stringOf(delta["reasoning_content"])
+		if r == "" {
+			r = stringOf(delta["reasoning"])
+		}
+		if r != "" {
 			result.Reasoning += r
 			events.Emit(sink, map[string]any{"t": "reasoning", "content": r})
 		}
