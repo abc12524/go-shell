@@ -1,12 +1,10 @@
 name: CI
 
-# 每次 push 与 PR 都跑：vet + test + 四平台交叉编译（只编译不发布）
+# 手动触发（Actions → CI → Run workflow）：vet + test + 四平台交叉编译（只编译不发布）
+# 推送代码不会自动跑，避免频繁提交触发构建。
 # 刻意不使用 uses: actions/*，改用 git 直接拉代码 —— 内网环境访问 github.com
 # 拉 action 仓库会偶发 "unexpected EOF"，去掉这个外部依赖后 CI 稳定得多。
 on:
-  push:
-    branches: ["**"] # 只跑分支；tag 推送交给 release.yml，避免同一提交编两遍
-  pull_request:
   workflow_dispatch:
 
 permissions:

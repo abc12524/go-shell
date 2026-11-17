@@ -1,16 +1,10 @@
 name: Release (Gitea)
 
 # Gitea 侧发布流程（GitHub 侧仍走 .github/workflows/release.yml）
-# 两种触发方式：
-#   1) 打 tag 推送 —— 自动编译四平台，并发布该 tag 对应的 Release
-#        git tag v1.0.0 && git push origin v1.0.0
-#   2) Actions → Release (Gitea) → Run workflow
-#        version 留空 → 自动 vYYYY.MM.DD-<short-sha>；publish=true 才发布
-# 日常 push 分支只跑 ci.yml，不会产生 Release。
+# 唯一触发方式：Actions → Release (Gitea) → Run workflow（不随 push / tag 自动跑）
+#   version 留空 → 自动 vYYYY.MM.DD-<short-sha>；publish=true 才发布
 # 不使用 uses: actions/*，checkout 直接用 git + GITHUB_TOKEN。
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
@@ -76,29 +70,17 @@ jobs:
           (cd pkg && sha256sum ./* > checksums.txt && cat checksums.txt)
 
       - name: 发布 Release
-        # tag 推送必然发布；手动触发时 publish=false 才会跳过（用 event.inputs 兼容无 input 的事件）
-        if: github.event_name == 'push' || github.event.inputs.publish != 'false'
+        if: github.event.inputs.publish != 'false'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases
           INPUT_VERSION: ${{ github.event.inputs.version }}
-          REF: ${{ github.ref }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          # tag 推送直接用 tag 名；手动触发按输入或日期生成
-          case "$REF" in
-            refs/tags/*)
-              TAG="${REF#refs/tags/}"
-              echo "触发方式：tag 推送（$TAG）"
-              ;;
-            *)
-              TAG="${INPUT_VERSION#v}"
-              if [ -z "$TAG" ]; then TAG="$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"; fi
-              echo "触发方式：手动"
-              ;;
-          esac
+          TAG="${INPUT_VERSION#v}"
+          if [ -z "$TAG" ]; then TAG="$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"; fi
           case "$TAG" in v*) ;; *) TAG="v${TAG}" ;; esac
           echo "tag: $TAG"
 
