@@ -1,10 +1,11 @@
 name: Release (Gitea)
 
-# Gitea 侧发布流程；GitHub 侧仍用 .github/workflows/release.yml
-# 手动触发：一次编译 4 个平台，可选直接发布 Gitea Release
-#   1) Actions → Release → Run workflow
-#   2) version 留空则自动生成 vYYYY.MM.DD-<short-sha>
-#   3) publish = true → 编完自动建 tag + Release 并上传全部产物
+# Gitea 侧发布流程（GitHub 侧仍走 .github/workflows/release.yml）
+# 手动触发：一次编译 4 个平台，可选直接建 tag + Release 并上传产物
+#   1) Actions → Release (Gitea) → Run workflow
+#   2) version 留空 → 自动 vYYYY.MM.DD-<short-sha>
+#   3) publish = true → 编完自动发布
+# 同样不使用 uses: actions/*，checkout 直接用 git + GITHUB_TOKEN。
 on:
   workflow_dispatch:
     inputs:
@@ -29,9 +30,18 @@ jobs:
     name: build + publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout（完整历史，供生成 tag 用）
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SRV="${{ github.server_url }}"
+          URL="http://oauth2:${TOKEN}@${SRV#http://}/${{ github.repository }}.git"
+          git init -q .
+          git remote add origin "$URL"
+          git fetch -q origin "${{ github.ref }}"
+          git checkout -q FETCH_HEAD
+          git log --oneline -1
 
       - name: 编译 4 个平台并打包
         run: |
@@ -97,4 +107,4 @@ jobs:
               -H "Content-Type: application/octet-stream" \
               --data-binary "@$f" "$API/$RID/assets?name=$name" >/dev/null
           done
-          echo "已发布 ${GITHUB_SERVER_URL:-${{ github.server_url }}}/${{ github.repository }}/releases/tag/$TAG"
+          echo "已发布 ${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG"

@@ -1,10 +1,15 @@
 name: CI
 
 # 每次 push 与 PR 都跑：vet + test + 四平台交叉编译（只编译不发布）
+# 刻意不使用 uses: actions/*，改用 git 直接拉代码 —— 内网环境访问 github.com
+# 拉 action 仓库会偶发 "unexpected EOF"，去掉这个外部依赖后 CI 稳定得多。
 on:
   push:
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   CGO_ENABLED: '0' # modernc.org/sqlite 为纯 Go 实现，可全平台静态交叉编译
@@ -14,7 +19,18 @@ jobs:
     name: vet + test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SRV="${{ github.server_url }}"
+          URL="http://oauth2:${TOKEN}@${SRV#http://}/${{ github.repository }}.git"
+          git init -q .
+          git remote add origin "$URL"
+          git fetch -q --depth 1 origin "${{ github.ref }}"
+          git checkout -q FETCH_HEAD
+          git log --oneline -1
 
       - name: 环境
         run: |
@@ -31,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           go build -trimpath -ldflags "-s -w" -buildvcs=false -o /tmp/go-shell .
-          /tmp/go-shell --help 2>&1 | head -5 || true
+          ls -lh /tmp/go-shell
 
   build:
     name: build ${{ matrix.asset }}
@@ -45,7 +61,17 @@ jobs:
           - { goos: linux,   goarch: arm,   goarm: '7', asset: linux-armv7 }
           - { goos: windows, goarch: amd64, goarm: '',  asset: windows-amd64 }
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SRV="${{ github.server_url }}"
+          URL="http://oauth2:${TOKEN}@${SRV#http://}/${{ github.repository }}.git"
+          git init -q .
+          git remote add origin "$URL"
+          git fetch -q --depth 1 origin "${{ github.ref }}"
+          git checkout -q FETCH_HEAD
 
       - name: 交叉编译
         env:
