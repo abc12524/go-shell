@@ -5,6 +5,7 @@ name: CI
 # 拉 action 仓库会偶发 "unexpected EOF"，去掉这个外部依赖后 CI 稳定得多。
 on:
   push:
+    branches: ["**"] # 只跑分支；tag 推送交给 release.yml，避免同一提交编两遍
   pull_request:
   workflow_dispatch:
 
