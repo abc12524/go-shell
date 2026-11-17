@@ -1,0 +1,100 @@
+name: Release (Gitea)
+
+# Gitea 侧发布流程；GitHub 侧仍用 .github/workflows/release.yml
+# 手动触发：一次编译 4 个平台，可选直接发布 Gitea Release
+#   1) Actions → Release → Run workflow
+#   2) version 留空则自动生成 vYYYY.MM.DD-<short-sha>
+#   3) publish = true → 编完自动建 tag + Release 并上传全部产物
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 v1.2.0）；留空自动生成 vYYYY.MM.DD-<short-sha>'
+        required: false
+        default: ''
+      publish:
+        description: '编译完成后是否发布 Release'
+        type: choice
+        options: ['true', 'false']
+        default: 'true'
+
+permissions:
+  contents: write
+
+env:
+  CGO_ENABLED: '0' # modernc.org/sqlite 是纯 Go 实现，可全平台静态交叉编译
+
+jobs:
+  release:
+    name: build + publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 编译 4 个平台并打包
+        run: |
+          set -euo pipefail
+          mkdir -p pkg dist
+
+          build() {
+            local goos="$1" goarch="$2" goarm="$3" asset="$4"
+            echo "── $asset (GOOS=$goos GOARCH=$goarch GOARM=${goarm:-})"
+            rm -rf dist && mkdir -p dist
+            ext=""
+            if [ "$goos" = "windows" ]; then ext=".exe"; fi
+            GOOS="$goos" GOARCH="$goarch" GOARM="$goarm" \
+              go build -trimpath -ldflags "-s -w" -buildvcs=false -o "dist/go-shell${ext}" .
+            cp README.md dist/
+            if [ "$goos" = "windows" ]; then
+              (cd dist && zip -9 -q "../pkg/${asset}.zip" ./*)
+            else
+              tar -czf "pkg/${asset}.tar.gz" -C dist .
+            fi
+          }
+
+          build linux   amd64 ''  go-shell-linux-amd64
+          build linux   arm64 ''  go-shell-linux-arm64
+          build linux   arm   '7' go-shell-linux-armv7
+          build windows amd64 ''  go-shell-windows-amd64
+
+          (cd pkg && sha256sum ./* > checksums.txt && cat checksums.txt)
+
+      - name: 发布 Release
+        if: inputs.publish == 'true'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          TAG="${VERSION#v}"
+          if [ -z "$TAG" ]; then TAG="$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"; fi
+          TAG="v${TAG}"
+          echo "tag: $TAG"
+
+          # 同名 tag 的旧 release 先删掉，保证可重复发布
+          EXISTING=$(curl -s -H "Authorization: token $TOKEN" "$API/tags/$TAG")
+          if echo "$EXISTING" | grep -q '"id"'; then
+            EID=$(echo "$EXISTING" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+            echo "删除旧 release id=$EID"
+            curl -s -X DELETE -H "Authorization: token $TOKEN" "$API/$EID" >/dev/null
+          fi
+
+          REL=$(curl -s -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"body\":\"go-shell $TAG（commit ${{ github.sha }}）\",\"prerelease\":false}" \
+            "$API")
+          RID=$(echo "$REL" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+          if [ -z "$RID" ]; then echo "创建 release 失败：$REL"; exit 1; fi
+          echo "release id=$RID"
+
+          for f in pkg/*; do
+            name=$(basename "$f")
+            echo "上传 $name"
+            curl -s -X POST -H "Authorization: token $TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f" "$API/$RID/assets?name=$name" >/dev/null
+          done
+          echo "已发布 ${GITHUB_SERVER_URL:-${{ github.server_url }}}/${{ github.repository }}/releases/tag/$TAG"
