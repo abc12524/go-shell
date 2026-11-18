@@ -50,6 +50,17 @@ var (
 	MaxToolRounds int
 	WebSearch     bool
 
+	// ===== 命令输出修剪（后端 rtk-web 实现）=====
+	// execute_system_command 的输出先交给修剪服务压缩；服务不可达、超时、非 2xx
+	// 或返回异常时静默回退原始输出。
+	TrimEnabled      bool
+	TrimHost         string  // 留空 = 不修剪（不回退任何内置地址）
+	TrimPort         int     // host 自带端口时可留空
+	TrimMode         string  // auto | chain
+	TrimFormat       string  // term | json | web | matches | lockfile | auto
+	TrimTimeout      float64 // 单次请求超时（秒）
+	TrimRetrySeconds float64 // 请求失败后暂停调用的秒数（熔断）
+
 	// ===== 调试 =====
 	DebugSendSeq bool
 
@@ -375,6 +386,29 @@ func Load() {
 
 	MaxToolRounds = integer(envMap, "MAX_TOOL_ROUNDS", 6)
 	WebSearch = boolean(envMap, "LLM_WEB_SEARCH", false)
+
+	TrimEnabled = boolean(envMap, "OUTPUT_TRIM_ENABLED", true)
+	TrimHost = strings.TrimSpace(str(envMap, "OUTPUT_TRIM_HOST", ""))
+	TrimPort = integer(envMap, "OUTPUT_TRIM_PORT", 0)
+	TrimMode = strings.ToLower(str(envMap, "OUTPUT_TRIM_MODE", "auto"))
+	if TrimMode != "chain" {
+		TrimMode = "auto"
+	}
+	TrimFormat = strings.ToLower(str(envMap, "OUTPUT_TRIM_FORMAT", "term"))
+	switch TrimFormat {
+	case "term", "json", "web", "matches", "lockfile", "auto":
+	default:
+		TrimFormat = "term"
+	}
+	TrimTimeout = float(envMap, "OUTPUT_TRIM_TIMEOUT", 10)
+	if TrimTimeout < 0.5 {
+		TrimTimeout = 0.5
+	}
+	TrimRetrySeconds = float(envMap, "OUTPUT_TRIM_RETRY_SECONDS", 60)
+	if TrimRetrySeconds < 0 {
+		TrimRetrySeconds = 0
+	}
+
 	DebugSendSeq = boolean(envMap, "DEBUG_SEND_SEQ", false)
 	UserTips = strings.TrimSpace(str(envMap, "user_tips", ""))
 

@@ -16,6 +16,7 @@ import (
 	"go-shell/internal/config"
 	"go-shell/internal/envelope"
 	"go-shell/internal/events"
+	"go-shell/internal/trim"
 )
 
 var skillRe = regexp.MustCompile(`(?i)^#\s*skill\s*:\s*(\S+)\s*$`)
@@ -175,14 +176,43 @@ func ExecuteSystemCommand(command string) string {
 	if output == "" {
 		output = "命令执行成功（无输出）"
 	}
+
+	// 先过输出修剪服务，再按字符上限截断；服务异常时保留原始输出
+	var trimInfo map[string]any
+	if stdout != "" || stderr != "" {
+		if trimmed, stats, ok := safeTrim(output); ok {
+			output, trimInfo = trimmed, stats
+		}
+	}
+
 	truncated := false
-	if len(output) > 6000 {
-		output = output[:6000] + fmt.Sprintf("\n... (输出被截断，原长度 %d 字符)", len(output))
+	limited := []rune(output)
+	if len(limited) > maxOutputChars {
+		output = string(limited[:maxOutputChars]) + fmt.Sprintf("\n... (输出被截断，原长度 %d 字符)", len(limited))
 		truncated = true
 	}
-	return envelope.Ok(map[string]any{
+	result := map[string]any{
 		"output": output, "exit_code": returnCode, "truncated": truncated,
-	})
+	}
+	if trimInfo != nil {
+		result["trim"] = trimInfo
+	}
+	return envelope.Ok(result)
+}
+
+// maxOutputChars 回给模型的输出上限（按字符计，与 shell-tool 的 len(str) 一致）。
+// 按字节截会把中文输出砍到三分之一，还可能切在 UTF-8 半个字符上。
+const maxOutputChars = 6000
+
+// safeTrim 调修剪服务，任何 panic 都当作"没修剪"——修剪是锦上添花，
+// 绝不能因为它让一条正常执行完的命令变成失败。
+func safeTrim(text string) (trimmed string, stats map[string]any, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			trimmed, stats, ok = "", nil, false
+		}
+	}()
+	return trim.Apply(text)
 }
 
 // normalizeCRLF 规范化子进程输出的换行符：\r\n → \n，孤立 \r → \n。

@@ -49,6 +49,8 @@ Windows 同为 `%USERPROFILE%\.config\go-shell`。配置模板 `//go:embed` 在�
 
 - LLM 双协议：DeepSeek Responses API / OpenAI 兼容 Chat Completions，流式输出
 - 工具：get_system_info / execute_system_command / skill / skill_hub（可选 web_search）
+- 命令输出修剪：`execute_system_command` 的输出先经 rtk-web 压缩再回模型（`OUTPUT_TRIM_*`；
+  服务不可达、超时、返回异常时静默回退原文，不影响退出码）
 - skill：`skill/<名称>/skill.py` 由 `PYTHON_BIN` 子进程执行，runner 经 `//go:embed` 内嵌
   （运行时写临时文件），并自动注入 `core.tools.envelope` 兼容层，部署目录无需带 `core/`
 - 存储：本地 SQLite 唯一读写源 + 在线 MySQL 幂等同步（uid 去重 / synced 标记）
@@ -72,6 +74,14 @@ REMOTE_HOST=            # -h 不带值时的默认目标
 REMOTE_PORT=8000
 REMOTE_KEY=             # 默认访问码（= 对端 API_ACCESS_KEY）
 REMOTE_TIMEOUT=15       # 建连 / 健康检查超时（秒），流式对话不设总超时
+
+OUTPUT_TRIM_ENABLED=true   # 命令输出是否经修剪服务压缩
+OUTPUT_TRIM_HOST=          # 修剪服务地址（留空则跳过）；如 192.168.30.181
+OUTPUT_TRIM_PORT=          # 修剪服务端口；如 8787
+OUTPUT_TRIM_MODE=auto      # auto（激进有损）/ chain（固定链）
+OUTPUT_TRIM_FORMAT=term    # term / json / web / matches / lockfile / auto
+OUTPUT_TRIM_TIMEOUT=10     # 单次请求超时（秒）
+OUTPUT_TRIM_RETRY_SECONDS=60  # 失败后熔断秒数
 ```
 
 其余项（API Key、模型、OpenViking、MySQL、工具轮数等）见 `.env.example`。
@@ -133,4 +143,4 @@ question/db/session/memory/tool_round/continuing/warning/search/log/turn/interje
 
 ## 目录
 
-`main.go` 入口 · `internal/{chat,llm,tools,events,server,client,db,config,billing,interject,recall,envelope}`
+`main.go` 入口 · `internal/{chat,llm,tools,trim,events,server,client,db,config,billing,interject,recall,envelope}`
