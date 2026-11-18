@@ -140,8 +140,10 @@ type balanceInfo struct {
 
 // balanceBody 兼容网关信封 {"status":"ok","result":{...}} 与裸 {"balance_infos":[...]}
 type balanceBody struct {
-	Result       *struct{ BalanceInfos []balanceInfo } `json:"result"`
-	BalanceInfos []balanceInfo                         `json:"balance_infos"`
+	Result       *struct {
+		BalanceInfos []balanceInfo `json:"balance_infos"`
+	} `json:"result"`
+	BalanceInfos []balanceInfo `json:"balance_infos"`
 }
 
 // gatewayClient 查内网网关用：自签名证书跳过校验，且不走 HTTP_PROXY
