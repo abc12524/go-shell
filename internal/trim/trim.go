@@ -32,7 +32,8 @@ const maxBodyBytes = 9 << 20
 // 这只是标注，不是回退理由：宿主带了 max_chars，服务端就是按预算裁的，
 // 报错行、首行、尾段都已保住。回退原文等于把"按预算选过的 6000 字符"
 // 换成"从头砍的 6000 字符"，覆盖范围更差。
-var lossyRe = regexp.MustCompile(`(?m)lines elided|\d+ chars truncated|^\s*\.\.\. \(\d+ (?:more|filtered)`)
+var lossyRe = regexp.MustCompile(
+	`(?m)lines elided|\[\+\d+ chars\]|\d+ chars truncated|^\s*\.\.\. \(\d+ (?:more|filtered)`)
 
 var (
 	mu        sync.Mutex    // 保护 downUntil
