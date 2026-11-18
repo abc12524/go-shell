@@ -1,14 +1,18 @@
 name: Release (Gitea)
 
 # Gitea 侧发布流程（GitHub 侧仍走 .github/workflows/release.yml）
-# 唯一触发方式：Actions → Release (Gitea) → Run workflow（不随 push / tag 自动跑）
-#   version 留空 → 自动 vYYYY.MM.DD-<short-sha>；publish=true 才发布
+# 两种触发：
+#   1) 推 tag：git tag v0.1.6 && git push origin v0.1.6（tag 即版本号）
+#   2) Actions → Release (Gitea) → Run workflow（版本号留空则按已有 tag 累加 patch）
+#   dispatch 时 publish=false 只编译不发布
 # 不使用 uses: actions/*，checkout 直接用 git + GITHUB_TOKEN。
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（如 v1.2.0）；留空自动生成 vYYYY.MM.DD-<short-sha>'
+        description: '版本号（如 v1.2.0）；留空 = 在已有最大 tag 上累加 patch'
         required: false
         default: ''
       publish:
@@ -40,6 +44,39 @@ jobs:
           git fetch -q origin "${{ github.ref }}"
           git checkout -q FETCH_HEAD
           git log --oneline -1
+
+      - name: 解析版本号
+        id: ver
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # 优先级：推送的 tag > dispatch 传入的 version > 已有最大 vX.Y.Z 累加 patch
+          TAG=""
+          case "${{ github.ref }}" in
+            refs/tags/*) TAG="${{ github.ref }}"; TAG="${TAG#refs/tags/}" ;;
+          esac
+          if [ -z "$TAG" ]; then TAG="${{ github.event.inputs.version }}"; fi
+
+          if [ -z "$TAG" ]; then
+            SRV="${{ github.server_url }}"
+            URL="http://oauth2:${TOKEN}@${SRV#http://}/${{ github.repository }}.git"
+            LAST=$(git ls-remote --tags --refs "$URL" 'v*' \
+              | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            if [ -z "$LAST" ]; then
+              TAG="v0.1.0"
+            else
+              BASE="${LAST#v}"
+              MAJ="${BASE%%.*}"; REST="${BASE#*.}"; MIN="${REST%%.*}"; PAT="${REST#*.}"
+              TAG="v${MAJ}.${MIN}.$((PAT + 1))"
+              echo "已有最大 $LAST → 本次累加为 $TAG"
+            fi
+          fi
+
+          case "$TAG" in v*) ;; *) TAG="v${TAG}" ;; esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "本次发布 tag：$TAG"
 
       - name: 编译 4 个平台并打包
         run: |
@@ -74,14 +111,11 @@ jobs:
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          TAG="${INPUT_VERSION#v}"
-          if [ -z "$TAG" ]; then TAG="$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"; fi
-          case "$TAG" in v*) ;; *) TAG="v${TAG}" ;; esac
           echo "tag: $TAG"
 
           # 同名 tag 的旧 release 先删掉，保证可重复发布
