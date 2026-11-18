@@ -46,6 +46,11 @@ var (
 	SessionHeader string
 	UserAgent     string
 
+	// ===== 账户余额查询 =====
+	// 留空 = 用 DEEPSEEK_API_KEY 查官方 {DEEPSEEK_BASE_URL}/user/balance；
+	// 配置后改查自建网关（此地址作基址自动拼 /api/balance，无需 Key）。
+	BalanceURL string
+
 	// ===== 工具调用 =====
 	MaxToolRounds int
 	WebSearch     bool
@@ -383,6 +388,8 @@ func Load() {
 		SessionHeader = "x-opencode-session"
 	}
 	UserAgent = str(envMap, "LLM_USER_AGENT", "")
+
+	BalanceURL = strings.TrimSpace(str(envMap, "BALANCE_URL", ""))
 
 	MaxToolRounds = integer(envMap, "MAX_TOOL_ROUNDS", 6)
 	WebSearch = boolean(envMap, "LLM_WEB_SEARCH", false)

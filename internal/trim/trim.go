@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,16 @@ import (
 
 // maxBodyBytes 单次请求体上限：rtk-web 的 RTK_WEB_MAX_BODY 默认 10 MiB，超了就跳过修剪。
 const maxBodyBytes = 9 << 20
+
+// lossHintRe rtk 的过滤器丢了内容时只留一行计数，条目本身不进输出：
+//
+//	ls 超过 50 项             -> "... (12 more)"
+//	ls 命中噪音目录 / 解析失败 -> "... (3 filtered)"
+//	"... (2 more, 1 filtered)"
+//
+// 这类结果少了东西（rtk-web 里 tee 恢复未启用，等于彻底丢失），压缩收益再大
+// 也不能用 —— 宁可退回原文。只认行首的独立提示行，避免误伤正文里恰好出现的括号。
+var lossHintRe = regexp.MustCompile(`(?m)^\s*\.\.\. \(\d+ (?:more|filtered)`)
 
 var (
 	mu        sync.Mutex    // 保护 downUntil
@@ -103,6 +114,11 @@ func Apply(text string) (string, map[string]any, bool) {
 	before, after := utf8.RuneCountInString(text), utf8.RuneCountInString(trimmed)
 	// 没变短就没必要换——修剪的意义只有省 token
 	if trimmed == "" || after >= before {
+		return "", nil, false
+	}
+	// 压缩结果带折叠计数 = 有条目被吞掉（且 rtk-web 里 tee 恢复不可用），
+	// 这条信息比省下的 token 值钱，直接用原文
+	if lossHintRe.MatchString(trimmed) {
 		return "", nil, false
 	}
 

@@ -198,6 +198,37 @@ func TestApplySkipsOversizeBody(t *testing.T) {
 	}
 }
 
+func TestApplyKeepsOriginalWhenEntriesDropped(t *testing.T) {
+	defer resetState()
+	// 压缩结果带折叠计数 = rtk 过滤器吞掉了条目，收益再大也不能用
+	dropped := []string{
+		"drwxr-xr-x 2 root root 4096 a\n... (1 filtered)",
+		"文件列表\n  ... (12 more)",
+		"文件列表\n... (2 more, 1 filtered)",
+	}
+	for _, body := range dropped {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		pointTo(t, srv.URL)
+		if out, _, ok := Apply(strings.Repeat("原始输出行\n", 30)); ok {
+			srv.Close()
+			t.Fatalf("带折叠计数的结果 %q 不该被采用", out)
+		}
+		srv.Close()
+	}
+
+	// 正文里恰好出现的括号不是独立提示行，照常用压缩结果
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("共 3 项，省略 ... (3 more) 行"))
+	}))
+	defer srv.Close()
+	pointTo(t, srv.URL)
+	if _, _, ok := Apply(strings.Repeat("原始输出行\n", 30)); !ok {
+		t.Fatal("正文内联括号不该触发回退")
+	}
+}
+
 func TestApplyBackoffAfterFailure(t *testing.T) {
 	defer resetState()
 	var hits int32

@@ -117,13 +117,14 @@ func Warning(s Sink, message, code string) {
 }
 
 // Usage 用量统计事件
-func Usage(s Sink, model string, peak bool, hit, miss, out int64, costHit, costMiss, costOut, total float64, balance, currency, symbol, period string) {
+// noBalance：该服务商不提供余额（OpenCode Go），此时不显示「查询失败」
+func Usage(s Sink, model string, peak bool, hit, miss, out int64, costHit, costMiss, costOut, total float64, balance, currency, symbol, period string, noBalance bool) {
 	emit(s, "usage", map[string]any{
 		"model": model, "peak": peak,
 		"hit": float64(hit), "miss": float64(miss), "out": float64(out),
 		"cost_hit": costHit, "cost_miss": costMiss, "cost_out": costOut,
 		"total": total, "balance": balance, "currency": currency,
-		"symbol": symbol, "period": period,
+		"symbol": symbol, "period": period, "no_balance": noBalance,
 	})
 }
 
@@ -558,6 +559,7 @@ func (t *Terminal) Emit(evt map[string]any) {
 		costMiss, _ := evt["cost_miss"].(float64)
 		costOut, _ := evt["cost_out"].(float64)
 		balance, _ := evt["balance"].(string)
+		noBalance, _ := evt["no_balance"].(bool)
 		short := strings.Split(period, "（")[0]
 		rows := [][]string{
 			{"输入 · 缓存命中", commaInt(hit), money(symbol, costHit)},
@@ -569,7 +571,7 @@ func (t *Terminal) Emit(evt map[string]any) {
 			[]string{"项目", "tokens", "费用"}, rows, []bool{false, true, true}, 1))
 		if balance != "" {
 			fmt.Println("  " + sty(stMuted, "余额 ") + sty(stOk, symbol+balance))
-		} else {
+		} else if !noBalance {
 			fmt.Println("  " + sty(stMuted, "余额 查询失败"))
 		}
 	case "error":

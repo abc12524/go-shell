@@ -2,7 +2,9 @@
 package billing
 
 import (
+	"crypto/tls"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -119,9 +121,85 @@ func ComputeCost(hit, miss, out int64, model string, when time.Time) (float64, b
 	return c.Hit + c.Miss + c.Out, peak, c
 }
 
-// FetchBalance 实时查询 DeepSeek 账户余额，返回 (金额, 币种)；失败返回 ("","")
+// balanceURL 余额网关地址：BALANCE_URL 作基址拼 /api/balance；未配置返回空串。
+func balanceURL() string {
+	base := strings.TrimRight(strings.TrimSpace(config.BalanceURL), "/")
+	if base == "" {
+		return ""
+	}
+	if strings.HasSuffix(base, "/api/balance") {
+		return base
+	}
+	return base + "/api/balance"
+}
+
+type balanceInfo struct {
+	TotalBalance string `json:"total_balance"`
+	Currency     string `json:"currency"`
+}
+
+// balanceBody 兼容网关信封 {"status":"ok","result":{...}} 与裸 {"balance_infos":[...]}
+type balanceBody struct {
+	Result       *struct{ BalanceInfos []balanceInfo } `json:"result"`
+	BalanceInfos []balanceInfo                         `json:"balance_infos"`
+}
+
+// gatewayClient 查内网网关用：自签名证书跳过校验，且不走 HTTP_PROXY
+// （内网地址送进代理会直接失败）。
+func gatewayClient() *http.Client {
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy:           nil,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+}
+
+func decodeBalance(data []byte) (string, string) {
+	var body balanceBody
+	if err := json.Unmarshal(data, &body); err != nil {
+		return "", ""
+	}
+	infos := body.BalanceInfos
+	if body.Result != nil {
+		infos = body.Result.BalanceInfos
+	}
+	if len(infos) == 0 {
+		return "", ""
+	}
+	return infos[0].TotalBalance, infos[0].Currency
+}
+
+// FetchBalance 查询账户余额，返回 (金额, 币种)；失败返回 ("","")。
+//
+// 两种模式：
+//   - 未配置 BALANCE_URL：用 DEEPSEEK_API_KEY 查官方 {DEEPSEEK_BASE_URL}/user/balance
+//   - 配置了 BALANCE_URL：查自建网关 {BALANCE_URL}/api/balance（无需 Key）
+//
+// OpenCode Go 不显示余额，直接返回空。
 func FetchBalance() (string, string) {
 	if IsOpenCodeGo() {
+		return "", ""
+	}
+	if url := balanceURL(); url != "" {
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return "", ""
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := gatewayClient().Do(req)
+		if err != nil {
+			return "", ""
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
+			return "", ""
+		}
+		return decodeBalance(data)
+	}
+	if config.APIKey == "" {
 		return "", ""
 	}
 	url := strings.TrimRight(config.BaseURL, "/") + "/user/balance"
@@ -137,14 +215,9 @@ func FetchBalance() (string, string) {
 		return "", ""
 	}
 	defer resp.Body.Close()
-	var body struct {
-		BalanceInfos []struct {
-			TotalBalance string `json:"total_balance"`
-			Currency     string `json:"currency"`
-		} `json:"balance_infos"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || len(body.BalanceInfos) == 0 {
+	data, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "", ""
 	}
-	return body.BalanceInfos[0].TotalBalance, body.BalanceInfos[0].Currency
+	return decodeBalance(data)
 }

@@ -435,10 +435,15 @@ func printUsageStats(sink events.Sink, usage *llm.Usage, askedAt time.Time) {
 	if currency == "" {
 		currency = billing.Currency()
 	}
+	// 余额币种以接口返回为准（可能与计费币种不同）
+	symbol := billing.CurrencySymbol()
+	if strings.EqualFold(currency, "USD") {
+		symbol = "$"
+	}
 	events.Usage(sink, config.Model, peak,
 		usage.PromptCacheHitTokens, usage.PromptCacheMissTokens, usage.CompletionTokens,
 		costs.Hit, costs.Miss, costs.Out, totalCost, balance, currency,
-		billing.CurrencySymbol(), billing.PeriodLabel(peak))
+		symbol, billing.PeriodLabel(peak), billing.IsOpenCodeGo())
 }
 
 // ---------- 非对话动作（-s / -S / -I / -D）----------
