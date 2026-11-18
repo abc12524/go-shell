@@ -140,7 +140,7 @@ type balanceInfo struct {
 
 // balanceBody 兼容网关信封 {"status":"ok","result":{...}} 与裸 {"balance_infos":[...]}
 type balanceBody struct {
-	Result       *struct {
+	Result *struct {
 		BalanceInfos []balanceInfo `json:"balance_infos"`
 	} `json:"result"`
 	BalanceInfos []balanceInfo `json:"balance_infos"`
