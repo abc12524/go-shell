@@ -23,15 +23,16 @@ import (
 // maxBodyBytes 单次请求体上限：rtk-web 的 RTK_WEB_MAX_BODY 默认 10 MiB，超了就跳过修剪。
 const maxBodyBytes = 9 << 20
 
-// lossHintRe rtk 的过滤器丢了内容时只留一行计数，条目本身不进输出：
+// lossyRe 压缩结果里代表"有条目没进输出"的标记：
 //
-//	ls 超过 50 项             -> "... (12 more)"
-//	ls 命中噪音目录 / 解析失败 -> "... (3 filtered)"
-//	"... (2 more, 1 filtered)"
+//	ls 过滤器        -> "... (12 more)" / "... (3 filtered)"
+//	cap 省略         -> "[… 33 lines elided …]"
+//	budget 裁剪      -> "[… 33 lines elided …]" / "[+120 chars]"
 //
-// 这类结果少了东西（rtk-web 里 tee 恢复未启用，等于彻底丢失），压缩收益再大
-// 也不能用 —— 宁可退回原文。只认行首的独立提示行，避免误伤正文里恰好出现的括号。
-var lossHintRe = regexp.MustCompile(`(?m)^\s*\.\.\. \(\d+ (?:more|filtered)`)
+// 这只是标注，不是回退理由：宿主带了 max_chars，服务端就是按预算裁的，
+// 报错行、首行、尾段都已保住。回退原文等于把"按预算选过的 6000 字符"
+// 换成"从头砍的 6000 字符"，覆盖范围更差。
+var lossyRe = regexp.MustCompile(`(?m)lines elided|\d+ chars truncated|^\s*\.\.\. \(\d+ (?:more|filtered)`)
 
 var (
 	mu        sync.Mutex    // 保护 downUntil
@@ -87,6 +88,9 @@ func Apply(text string) (string, map[string]any, bool) {
 	q.Set("mode", config.TrimMode)
 	q.Set("lossless", "false")
 	q.Set("charset", "utf-8") // 子进程输出已统一转成 UTF-8 再进来
+	// 让服务端知道宿主的截断口径：它在预算内按重要性裁（保报错行 / 首尾 /
+	// 采样中间），比我们拿到结果后砍尾巴更省也更准。
+	q.Set("max_chars", strconv.Itoa(config.TrimMaxChars))
 
 	req, err := http.NewRequest(http.MethodPost, base+"/api/compress?"+q.Encode(), strings.NewReader(text))
 	if err != nil {
@@ -116,17 +120,16 @@ func Apply(text string) (string, map[string]any, bool) {
 	if trimmed == "" || after >= before {
 		return "", nil, false
 	}
-	// 压缩结果带折叠计数 = 有条目被吞掉（且 rtk-web 里 tee 恢复不可用），
-	// 这条信息比省下的 token 值钱，直接用原文
-	if lossHintRe.MatchString(trimmed) {
-		return "", nil, false
-	}
+	// 压缩结果带省略标记 = 有条目没进输出，但这是服务端按预算做的取舍，
+	// 只在统计里标出来（调用方/模型可据此决定要不要精确化命令），不回退原文。
+	lossy := lossyRe.MatchString(trimmed)
 
 	stats := map[string]any{
 		"saved_percent": headerFloat(resp.Header, "X-Rtk-Saved-Percent",
 			math.Round(float64(before-after)/float64(before)*1000)/10),
 		"bytes_before": headerInt(resp.Header, "X-Rtk-Bytes-Before", int64(len(text))),
 		"bytes_after":  headerInt(resp.Header, "X-Rtk-Bytes-After", int64(len(body))),
+		"lossy":        lossy,
 	}
 	return trimmed, stats, true
 }

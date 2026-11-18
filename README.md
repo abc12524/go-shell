@@ -50,8 +50,10 @@ Windows 同为 `%USERPROFILE%\.config\go-shell`。配置模板 `//go:embed` 在�
 - LLM 双协议：DeepSeek Responses API / OpenAI 兼容 Chat Completions，流式输出
 - 工具：get_system_info / execute_system_command / skill / skill_hub（可选 web_search）
 - 命令输出修剪：`execute_system_command` 的输出先经 rtk-web 压缩再回模型（`OUTPUT_TRIM_*`；
-  服务不可达、超时、返回异常时静默回退原文，不影响退出码；压缩结果含折叠计数
-  `... (N more)` / `... (N filtered)` 时同样回退原文，避免条目被吃掉）
+  服务不可达、超时、返回异常时静默回退原文，不影响退出码）。请求带 `max_chars`
+  （`OUTPUT_TRIM_MAX_CHARS`，默认 6000），服务端按预算裁：首行 / 报错行 / 尾段优先，
+  其余等间隔采样并标 `[… N lines elided …]`；被裁过时 `trim` 里带 `lossy: true`。
+  代码里的 6000 字符截断因此退化为兜底。
 - skill：`skill/<名称>/skill.py` 由 `PYTHON_BIN` 子进程执行，runner 经 `//go:embed` 内嵌
   （运行时写临时文件），并自动注入 `core.tools.envelope` 兼容层，部署目录无需带 `core/`
 - 存储：本地 SQLite 唯一读写源 + 在线 MySQL 幂等同步（uid 去重 / synced 标记）
@@ -83,6 +85,7 @@ OUTPUT_TRIM_PORT=          # 修剪服务端口；如 8787
 OUTPUT_TRIM_MODE=auto      # auto（激进有损）/ chain（固定链）
 OUTPUT_TRIM_FORMAT=term    # term / json / web / matches / lockfile / auto
 OUTPUT_TRIM_TIMEOUT=10     # 单次请求超时（秒）
+OUTPUT_TRIM_MAX_CHARS=6000 # 交给服务的字符预算（服务端按它裁，保住报错行）
 OUTPUT_TRIM_RETRY_SECONDS=60  # 失败后熔断秒数
 
 BALANCE_URL=               # 余额接口基址（留空=用 Key 查官方 /user/balance）

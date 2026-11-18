@@ -65,6 +65,7 @@ var (
 	TrimFormat       string  // term | json | web | matches | lockfile | auto
 	TrimTimeout      float64 // 单次请求超时（秒）
 	TrimRetrySeconds float64 // 请求失败后暂停调用的秒数（熔断）
+	TrimMaxChars     int     // 交给修剪服务的字符预算，与 6000 截断对齐
 
 	// ===== 调试 =====
 	DebugSendSeq bool
@@ -414,6 +415,12 @@ func Load() {
 	TrimRetrySeconds = float(envMap, "OUTPUT_TRIM_RETRY_SECONDS", 60)
 	if TrimRetrySeconds < 0 {
 		TrimRetrySeconds = 0
+	}
+	// 预算跟 execute_system_command 的 6000 截断对齐：服务端按预算裁，
+	// 保首行 / 报错行 / 尾段，宿主那道截断就退化为兜底。
+	TrimMaxChars = integer(envMap, "OUTPUT_TRIM_MAX_CHARS", 6000)
+	if TrimMaxChars < 200 {
+		TrimMaxChars = 6000
 	}
 
 	DebugSendSeq = boolean(envMap, "DEBUG_SEND_SEQ", false)

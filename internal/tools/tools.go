@@ -202,6 +202,9 @@ func ExecuteSystemCommand(command string) string {
 
 // maxOutputChars 回给模型的输出上限（按字符计，与 shell-tool 的 len(str) 一致）。
 // 按字节截会把中文输出砍到三分之一，还可能切在 UTF-8 半个字符上。
+//
+// 兜底用：正常路径由修剪服务按 OUTPUT_TRIM_MAX_CHARS 裁到预算内（并保住报错行），
+// 这里只在服务不可用 / 跳过修剪时才生效。
 const maxOutputChars = 6000
 
 // safeTrim 调修剪服务，任何 panic 都当作"没修剪"——修剪是锦上添花，

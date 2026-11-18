@@ -18,6 +18,7 @@ func TestMain(m *testing.M) {
 	config.TrimTimeout = 5
 	config.TrimRetrySeconds = 0
 	config.TrimMode = "auto"
+	config.TrimMaxChars = 6000
 	config.TrimFormat = "term"
 	m.Run()
 }
@@ -198,34 +199,65 @@ func TestApplySkipsOversizeBody(t *testing.T) {
 	}
 }
 
-func TestApplyKeepsOriginalWhenEntriesDropped(t *testing.T) {
+func TestApplyFlagsLossyResults(t *testing.T) {
 	defer resetState()
-	// 压缩结果带折叠计数 = rtk 过滤器吞掉了条目，收益再大也不能用
-	dropped := []string{
+	// 带省略标记的结果照样采用（服务端按 max_chars 预算裁的，报错行已保住），
+	// 但统计里要标出来，调用方/模型才知道结果不完整。
+	lossy := []string{
 		"drwxr-xr-x 2 root root 4096 a\n... (1 filtered)",
 		"文件列表\n  ... (12 more)",
 		"文件列表\n... (2 more, 1 filtered)",
+		"[… 33 lines elided …]\n总计 1.2M",
+		"很长的一行 [+120 chars]",
 	}
-	for _, body := range dropped {
+	for _, body := range lossy {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(body))
 		}))
 		pointTo(t, srv.URL)
-		if out, _, ok := Apply(strings.Repeat("原始输出行\n", 30)); ok {
-			srv.Close()
-			t.Fatalf("带折叠计数的结果 %q 不该被采用", out)
-		}
+		out, stats, ok := Apply(strings.Repeat("原始输出行\n", 30))
 		srv.Close()
+		if !ok {
+			t.Fatalf("带省略标记的结果 %q 应被采用", body)
+		}
+		if stats["lossy"] != true {
+			t.Fatalf("结果 %q 应标记 lossy，实际 %v", body, stats["lossy"])
+		}
+		if out == "" {
+			t.Fatal("采用了结果却返回空文本")
+		}
 	}
 
-	// 正文里恰好出现的括号不是独立提示行，照常用压缩结果
+	// 正文里恰好出现的括号不是独立提示行，不该标 lossy
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("共 3 项，省略 ... (3 more) 行"))
+		_, _ = w.Write([]byte("共 3 项，省略 ... (3 more) 行\n附加说明行"))
 	}))
 	defer srv.Close()
 	pointTo(t, srv.URL)
+	_, stats, ok := Apply(strings.Repeat("原始输出行\n", 30))
+	if !ok {
+		t.Fatal("正文内联括号不该影响采用")
+	}
+	if stats["lossy"] == true {
+		t.Fatal("正文内联括号不该被标成 lossy")
+	}
+}
+
+func TestApplySendsMaxCharsBudget(t *testing.T) {
+	defer resetState()
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query().Get("max_chars")
+		_, _ = w.Write([]byte("短"))
+	}))
+	defer srv.Close()
+	pointTo(t, srv.URL)
+
 	if _, _, ok := Apply(strings.Repeat("原始输出行\n", 30)); !ok {
-		t.Fatal("正文内联括号不该触发回退")
+		t.Fatal("应返回压缩结果")
+	}
+	if got != strconv.Itoa(config.TrimMaxChars) {
+		t.Fatalf("max_chars 应传 %d，实际 %q", config.TrimMaxChars, got)
 	}
 }
 
