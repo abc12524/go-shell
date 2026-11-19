@@ -28,8 +28,35 @@ env:
   CGO_ENABLED: '0' # modernc.org/sqlite 是纯 Go 实现，可全平台静态交叉编译
 
 jobs:
+  # 版本号只解析一次：build 用它注入二进制（-X main.version），release 用同一个值建 tag。
+  # 自动版本含日期，若两边各算一遍，跨零点会算出两个不同的 tag。
+  version:
+    name: resolve version
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.version }}"
+          TAG="${TAG#v}"
+          if [ -z "$TAG" ]; then
+            TAG="$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"
+          fi
+          TAG="v${TAG}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "resolved tag: $TAG"
+
   build:
     name: ${{ matrix.asset }}
+    needs: version
     if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     strategy:
@@ -53,11 +80,12 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
+          VERSION: ${{ needs.version.outputs.tag }}
         run: |
           set -euo pipefail
           EXT=""
           if [ "${GOOS}" = "windows" ]; then EXT=".exe"; fi
-          go build -trimpath -ldflags "-s -w" -buildvcs=false -o "dist/go-shell${EXT}" .
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -buildvcs=false -o "dist/go-shell${EXT}" .
           ls -lh "dist/go-shell${EXT}"
 
       - name: Package
@@ -81,7 +109,7 @@ jobs:
 
   release:
     name: publish
-    needs: build
+    needs: [version, build]
     if: github.server_url == 'https://github.com' && inputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -101,25 +129,12 @@ jobs:
           sha256sum ./* > checksums.txt
           cat checksums.txt
 
-      - name: Resolve tag
-        id: tag
-        run: |
-          set -euo pipefail
-          TAG="${{ inputs.version }}"
-          TAG="${TAG#v}"
-          if [ -z "$TAG" ]; then
-            TAG="$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"
-          fi
-          TAG="v${TAG}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "resolved tag: $TAG"
-
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.tag.outputs.tag }}"
+          TAG="${{ needs.version.outputs.tag }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG 已存在，先删除后重建"
             gh release delete "$TAG" --yes --cleanup-tag

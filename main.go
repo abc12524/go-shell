@@ -31,6 +31,15 @@ import (
 //go:embed .env.example
 var exampleConfig string
 
+// version 版本号：直接运行（无参数）打印帮助时显示在首行，与发布 tag 保持一致。
+// 编译期可用 -ldflags "-X main.version=vX.Y.Z" 覆盖，方便发布流程按 tag 注入。
+var version = "v0.1.8"
+
+// usageText 带版本号的帮助文本：正文统一放在 chat.UsageText，版本号只在入口注入。
+func usageText() string {
+	return "go-shell " + version + "\n\n" + chat.UsageText
+}
+
 // pullConfigFlag 预扫描 -c/--config 指定配置文件（支持 `-c 路径` 与 `-c=路径`），
 // 返回剔除该选项后的参数。须在 config.Load 与 server 子命令判定之前执行。
 func pullConfigFlag(args []string) []string {
@@ -136,7 +145,7 @@ func main() {
 			fmt.Printf("已开启新会话：%s\n", sessionID)
 			return
 		}
-		fmt.Print(chat.UsageText)
+		fmt.Print(usageText())
 		return
 	}
 
@@ -168,7 +177,7 @@ func main() {
 func runRemote(opts *chat.Options) {
 	hasAction := opts.ShowSkills || opts.HubAction != "" || opts.ListSessions || opts.SkillStatus[0] != ""
 	if opts.Question == "" && !opts.New && !hasAction {
-		fmt.Print(chat.UsageText)
+		fmt.Print(usageText())
 		return
 	}
 	tgt, err := config.ResolveRemote(opts.Remote)

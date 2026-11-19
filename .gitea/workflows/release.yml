@@ -79,6 +79,8 @@ jobs:
           echo "本次发布 tag：$TAG"
 
       - name: 编译 4 个平台并打包
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p pkg dist
@@ -90,7 +92,7 @@ jobs:
             ext=""
             if [ "$goos" = "windows" ]; then ext=".exe"; fi
             GOOS="$goos" GOARCH="$goarch" GOARM="$goarm" \
-              go build -trimpath -ldflags "-s -w" -buildvcs=false -o "dist/go-shell${ext}" .
+              go build -trimpath -ldflags "-s -w -X main.version=$TAG" -buildvcs=false -o "dist/go-shell${ext}" .
             cp README.md dist/
             if [ "$goos" = "windows" ]; then
               (cd dist && zip -9 -q "../pkg/${asset}.zip" ./*)
